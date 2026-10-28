@@ -51,7 +51,7 @@ def cmd_validate(a, cfg):
 
 def cmd_train(a, cfg):
     import pandas as pd
-    df = pd.read_csv(a.data) if a.data else generate_dataset(cfg["data"]["n_train"], a.scenario, seed=cfg["project"]["seed"])
+    df = pd.read_csv(a.data) if a.data else generate_dataset(a.rows or cfg["data"]["n_train"], a.scenario, seed=cfg["project"]["seed"])
     console.print(BANNER)
     console.print(Panel(f"Scenario [bold]{a.scenario}[/bold] · rows [bold]{len(df):,}[/bold] · "
                         f"tracking [bold]{cfg['mlflow']['tracking_uri']}[/bold]", title="Training pipeline"))
@@ -77,6 +77,14 @@ def cmd_train(a, cfg):
     console.print(Panel(f"run_id  [bold]{res.run_id}[/bold]\nmodel   {res.model_uri}\ndata    sha:{res.data_hash}\n"
                         f"time    {res.duration_s:.1f}s\n\nView experiments:  [cyan]mlflow ui --backend-store-uri {cfg['mlflow']['tracking_uri']}[/cyan]",
                         title="[green]✔ Pipeline succeeded[/green]", border_style="green"))
+    if a.register or a.promote:
+        from .registry import ModelRegistry
+        from .cli_registry import decision_panel, registry_table
+        reg = ModelRegistry(cfg); mv = reg.register_run(res.run_id)
+        console.print(f"[green]✔[/green] registered as [bold]v{mv.version}[/bold] (challenger)")
+        if a.promote:
+            d = reg.promote_if_better(mv.version); console.print(decision_panel(d, mv.version))
+        console.print(registry_table(reg))
     return 0
 
 
@@ -91,8 +99,24 @@ def main(argv=None):
     v.add_argument("data"); v.add_argument("-v", "--verbose", action="store_true")
     t = sub.add_parser("train", help="run the full training pipeline")
     t.add_argument("--data"); t.add_argument("--scenario", choices=SCENARIOS, default="baseline")
+    t.add_argument("--rows", type=int, help="override training rows (generated data only)")
+    t.add_argument("--register", action="store_true", help="register the model after training")
+    t.add_argument("--promote", action="store_true", help="run the promotion gate after registering")
+    r = sub.add_parser("registry", help="inspect and manage the model registry")
+    rs = r.add_subparsers(dest="rcmd", required=True)
+    rs.add_parser("list")
+    rg = rs.add_parser("register"); rg.add_argument("--run-id")
+    pr = rs.add_parser("promote"); pr.add_argument("version", nargs="?", type=int); pr.add_argument("--force", action="store_true")
+    rb = rs.add_parser("rollback"); rb.add_argument("--reason", default="manual rollback")
+    sub.add_parser("demo", help="scripted end-to-end registry demo (v1 -> v2 promoted -> v3 rejected -> rollback)")
     a = p.parse_args(argv)
     cfg = load_config(a.config)
+    if a.cmd == "registry":
+        from .cli_registry import run_registry_command
+        return run_registry_command(a, cfg)
+    if a.cmd == "demo":
+        from .demo import run_registry_demo
+        return run_registry_demo(cfg)
     return {"generate": cmd_generate, "validate": cmd_validate, "train": cmd_train}[a.cmd](a, cfg) or 0
 
 

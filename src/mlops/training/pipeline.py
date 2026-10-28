@@ -177,7 +177,7 @@ def run_training_pipeline(df: pd.DataFrame, cfg: dict, *, run_name: str | None =
         except TypeError:   # older MLflow versions
             info = mlflow.sklearn.log_model(best_model, artifact_path="model", signature=signature, input_example=sample,
                                             serialization_format="cloudpickle")
-        mlflow.set_tag("pipeline_status", "success")
+        mlflow.set_tags({"pipeline_status": "success", "model_uri": info.model_uri})
         emit("done", 1.0)
 
         return PipelineResult(run_id=run.info.run_id, model_uri=info.model_uri, best_model=best,

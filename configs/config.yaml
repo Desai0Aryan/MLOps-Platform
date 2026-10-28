@@ -47,3 +47,19 @@ training:
       max_iter: 200
       learning_rate: 0.08
       max_depth: 6
+
+# ---- Part 2: registry + promotion policy -----------------------------------
+registry:
+  champion_alias: champion
+  challenger_alias: challenger
+  # Fixed "golden" evaluation set. Every candidate is judged on the SAME data,
+  # so version-to-version comparisons are apples to apples.
+  eval_rows: 6000
+  eval_seed: 1234
+  promotion:
+    min_auc_improvement: 0.002     # challenger must beat champion by at least this
+    max_recall_drop: 0.03          # guardrail: don't trade away recall
+    max_brier_increase: 0.005      # guardrail: calibration must not get worse
+    require_significance: false    # if true, bootstrap CI lower bound must be > 0
+    bootstrap_samples: 300
+    confidence: 0.95

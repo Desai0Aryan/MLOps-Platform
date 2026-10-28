@@ -2,11 +2,11 @@
 
 A mini production ML platform: **train → track → register → deploy → monitor → detect drift → retrain.**
 
-> Build status: **Part 1 / 8 complete** ✅
+> Build status: **Part 2 / 8 complete** ✅
 
 ```
 PART 1  ████████████████████████████████  Foundation: data, validation, training, tracking   ✅
-PART 2  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Model registry + champion/challenger promotion
+PART 2  ████████████████████████████████  Model registry + champion/challenger promotion     ✅
 PART 3  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  FastAPI serving + PostgreSQL prediction logging
 PART 4  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  A/B testing + shadow deployment
 PART 5  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Drift detection + performance monitoring + auto-retrain
@@ -46,6 +46,36 @@ flowchart LR
 * **Quality gate.** A model below `min_auc_to_accept` is never logged as a deployable artifact.
 * **Per-model baselines.** The reference profile travels with the model so drift is measured against what *that* model saw.
 
+## What Part 2 delivers
+
+| Capability | Where |
+|---|---|
+| MLflow **model registry** using aliases (`champion`, `challenger`) + status/audit tags on every version | `registry/manager.py` |
+| **Promotion policy** judged on a fixed golden set: AUC gain, recall guardrail, calibration (Brier) guardrail, paired-bootstrap significance | `registry/promotion.py` |
+| Safe **rollback** with no external state (each champion records the version it replaced) | `ModelRegistry.rollback` |
+| Rejected models are tagged with the reason and never touch the champion | `promote_if_better` |
+| CLI: `registry list / register / promote / rollback`, `train --register --promote`, and a scripted `demo` | `cli.py`, `cli_registry.py`, `demo.py` |
+| 17 tests total (policy logic + full lifecycle) | `tests/test_registry.py` |
+
+### The story the demo tells
+```
+v1  1,500 rows            -> first model, PROMOTED (meets quality floor)
+v2  12,000 rows           -> ΔAUC +0.0056, all guardrails pass, PROMOTED
+v3  concept-drifted data  -> reports AUC 0.91 on ITS OWN test split, but 0.73 on the golden set -> REJECTED
+incident -> ROLLBACK v2 -> v1
+```
+**Key insight:** v3 looked great on its own test split. A model must be judged on a *shared, fixed* evaluation set,
+never on the data it was trained near. (In production the golden set would be curated, labeled real data.)
+
+```bash
+make demo                                 # watch the whole lifecycle
+python -m mlops.cli train --register --promote
+python -m mlops.cli registry list
+python -m mlops.cli registry rollback --reason "latency regression"
+```
+
+In Part 4 this offline gate becomes stage 1 of a longer path: **offline gate → shadow → A/B → promote**.
+
 ## Quickstart
 
 ```bash
@@ -53,7 +83,7 @@ python -m venv .venv && source .venv/bin/activate
 make install
 make data                   # generate data/train.csv
 make train                  # full pipeline with progress bar
-make test                   # 10 tests
+make test                   # 17 tests
 make ui                     # MLflow UI on http://localhost:5000
 ```
 
