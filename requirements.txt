@@ -1,0 +1,9 @@
+# --- Part 1: core ---
+numpy>=1.26
+pandas>=2.1
+scikit-learn>=1.4
+mlflow>=2.14
+pyyaml>=6.0
+rich>=13.7
+# --- dev ---
+pytest>=8.0

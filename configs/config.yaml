@@ -1,0 +1,49 @@
+project:
+  name: churn-mlops
+  seed: 42
+
+mlflow:
+  tracking_uri: sqlite:///mlflow.db
+  experiment_name: churn-prediction
+  registered_model_name: churn-classifier
+
+data:
+  target: churned
+  n_train: 20000
+  test_size: 0.2
+  min_rows: 1000
+
+# Data contract: every training batch is validated against this schema
+schema:
+  numeric:
+    tenure_months:      {min: 0,   max: 120,  max_null: 0.0}
+    monthly_charges:    {min: 10,  max: 250,  max_null: 0.0}
+    total_charges:      {min: 0,   max: 30000, max_null: 0.0}
+    num_support_calls:  {min: 0,   max: 30,   max_null: 0.0}
+    usage_gb:           {min: 0,   max: 2000, max_null: 0.02}
+    age:                {min: 18,  max: 100,  max_null: 0.0}
+  categorical:
+    contract_type:    {allowed: [month-to-month, one-year, two-year], max_null: 0.0}
+    payment_method:   {allowed: [credit_card, bank_transfer, electronic_check, mailed_check], max_null: 0.0}
+    internet_service: {allowed: [fiber, dsl, none], max_null: 0.0}
+  target:
+    name: churned
+    allowed: [0, 1]
+    min_positive_rate: 0.03
+    max_positive_rate: 0.70
+
+training:
+  min_auc_to_accept: 0.70      # quality gate: fail the pipeline below this
+  cv_folds: 3
+  candidates:
+    logistic_regression:
+      C: 1.0
+      max_iter: 500
+    random_forest:
+      n_estimators: 200
+      max_depth: 10
+      min_samples_leaf: 5
+    hist_gradient_boosting:
+      max_iter: 200
+      learning_rate: 0.08
+      max_depth: 6
