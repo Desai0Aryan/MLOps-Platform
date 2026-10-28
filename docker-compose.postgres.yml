@@ -1,0 +1,12 @@
+# Quick local PostgreSQL for the prediction log:
+#   docker compose -f docker-compose.postgres.yml up -d
+#   export DATABASE_URL=postgresql+psycopg2://mlops:mlops@localhost:5432/mlops
+# (The full stack arrives in Part 7.)
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: mlops, POSTGRES_PASSWORD: mlops, POSTGRES_DB: mlops }
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U mlops"], interval: 5s, retries: 10 }
+volumes: { pgdata: {} }

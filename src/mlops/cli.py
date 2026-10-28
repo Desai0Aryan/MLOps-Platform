@@ -108,12 +108,36 @@ def main(argv=None):
     rg = rs.add_parser("register"); rg.add_argument("--run-id")
     pr = rs.add_parser("promote"); pr.add_argument("version", nargs="?", type=int); pr.add_argument("--force", action="store_true")
     rb = rs.add_parser("rollback"); rb.add_argument("--reason", default="manual rollback")
+    sv = sub.add_parser("serve", help="run the FastAPI serving layer")
+    sv.add_argument("--host", default="0.0.0.0"); sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--reload", action="store_true")
+    sm = sub.add_parser("simulate", help="replay synthetic traffic (optionally drifted) against a running API")
+    sm.add_argument("--url", default="http://localhost:8000"); sm.add_argument("--scenario", choices=SCENARIOS, default="baseline")
+    sm.add_argument("--n", type=int, default=500); sm.add_argument("--label-rate", type=float, default=0.7)
+    sm.add_argument("--seed", type=int, default=123)
     sub.add_parser("demo", help="scripted end-to-end registry demo (v1 -> v2 promoted -> v3 rejected -> rollback)")
     a = p.parse_args(argv)
     cfg = load_config(a.config)
     if a.cmd == "registry":
         from .cli_registry import run_registry_command
         return run_registry_command(a, cfg)
+    if a.cmd == "serve":
+        import uvicorn
+        uvicorn.run("mlops.serving.app:create_app", factory=True, host=a.host, port=a.port, reload=a.reload)
+        return 0
+    if a.cmd == "simulate":
+        import httpx
+        from .simulate import simulate
+        with httpx.Client(base_url=a.url, timeout=60) as client, Progress(
+                TextColumn("[bold blue]{task.description:<30}"), BarColumn(bar_width=None),
+                TextColumn("{task.percentage:>3.0f}%"), console=console) as prog:
+            task = prog.add_task("starting", total=100)
+            sm = simulate(client, scenario=a.scenario, n=a.n, label_rate=a.label_rate, seed=a.seed,
+                          progress=lambda st, f: prog.update(task, description=st, completed=f * 100))
+        console.print(Panel(f"scenario [bold]{a.scenario}[/bold] · sent {sm.sent} · labeled {sm.labeled} · errors {sm.errors}\n"
+                            f"served by versions {sm.versions}\nmean predicted P(churn) {sm.mean_probability:.3f}  vs  actual churn rate {sm.actual_churn_rate:.3f}",
+                            title="Simulation complete", border_style="green"))
+        return 0
     if a.cmd == "demo":
         from .demo import run_registry_demo
         return run_registry_demo(cfg)

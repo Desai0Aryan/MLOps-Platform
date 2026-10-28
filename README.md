@@ -2,12 +2,12 @@
 
 A mini production ML platform: **train → track → register → deploy → monitor → detect drift → retrain.**
 
-> Build status: **Part 2 / 8 complete** ✅
+> Build status: **Part 3 / 8 complete** ✅
 
 ```
 PART 1  ████████████████████████████████  Foundation: data, validation, training, tracking   ✅
 PART 2  ████████████████████████████████  Model registry + champion/challenger promotion     ✅
-PART 3  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  FastAPI serving + PostgreSQL prediction logging
+PART 3  ████████████████████████████████  FastAPI serving + PostgreSQL prediction logging    ✅
 PART 4  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  A/B testing + shadow deployment
 PART 5  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Drift detection + performance monitoring + auto-retrain
 PART 6  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Prometheus + Grafana dashboards
@@ -76,6 +76,35 @@ python -m mlops.cli registry rollback --reason "latency regression"
 
 In Part 4 this offline gate becomes stage 1 of a longer path: **offline gate → shadow → A/B → promote**.
 
+## What Part 3 delivers
+
+| Capability | Where |
+|---|---|
+| FastAPI service: `/predict`, `/predict/batch`, `/feedback[/batch]`, `/model-info`, `/reload`, `/stats`, `/health`, `/ready` | `serving/app.py` |
+| **Request schema generated from the data contract**: one source of truth for training validation, API validation and OpenAPI docs | `serving/schemas.py` |
+| Every prediction logged (features, probability, version, latency, request id) via a **background task**, so the DB adds no latency | `serving/db.py` |
+| **Delayed ground-truth labels** joined on `request_id` -> live accuracy/AUC (powers Part 5) | `/feedback`, `/stats` |
+| **Zero-downtime hot reload**: new champion is loaded fully, then swapped atomically; also auto-polls the registry | `serving/store.py` |
+| Liveness vs readiness probes; 503 (not a crash) when no champion exists | `/health`, `/ready` |
+| SQLAlchemy 2.0: SQLite for tests, **PostgreSQL** via `DATABASE_URL` | `serving/db.py`, `docker-compose.postgres.yml` |
+| Traffic simulator that can replay any drift scenario + send delayed labels | `simulate.py` |
+| 29 tests total | `tests/test_serving.py` |
+
+```bash
+make train-register          # train, register, promote v1
+make serve                   # API on :8000  (docs at /docs)
+make simulate                # 1,000 baseline requests + labels
+python -m mlops.cli simulate --scenario concept_drift --n 1000
+curl localhost:8000/stats
+```
+
+**PostgreSQL:** `docker compose -f docker-compose.postgres.yml up -d`, then
+`export DATABASE_URL=postgresql+psycopg2://mlops:mlops@localhost:5432/mlops` before `make serve`.
+(Tests run on SQLite; the Postgres path uses the same SQLAlchemy models and is exercised end-to-end in Part 7.)
+
+**What the simulator already reveals:** replaying `concept_drift` traffic, the model predicts ~35% churn
+while the real rate is ~48%. That gap is exactly what Part 5's monitors will catch automatically.
+
 ## Quickstart
 
 ```bash
@@ -83,7 +112,7 @@ python -m venv .venv && source .venv/bin/activate
 make install
 make data                   # generate data/train.csv
 make train                  # full pipeline with progress bar
-make test                   # 17 tests
+make test                   # 29 tests
 make ui                     # MLflow UI on http://localhost:5000
 ```
 
