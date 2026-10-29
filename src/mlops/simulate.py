@@ -18,6 +18,7 @@ class SimulationSummary:
     sent: int
     labeled: int
     versions: dict
+    variants: dict
     mean_probability: float
     actual_churn_rate: float
     errors: int
@@ -59,9 +60,10 @@ def simulate(client, *, scenario: str = "baseline", n: int = 500, label_rate: fl
         emit("sending ground-truth labels", 0.7 + 0.3 * min(s + 1000, len(items)) / max(len(items), 1))
     emit("done", 1.0)
 
-    versions: dict = {}
+    versions: dict = {}; variants: dict = {}
     for res, _ in results:
         versions[res["model_version"]] = versions.get(res["model_version"], 0) + 1
-    return SimulationSummary(len(results), len(items), versions,
+        variants[res["variant"]] = variants.get(res["variant"], 0) + 1
+    return SimulationSummary(len(results), len(items), versions, variants,
                              float(np.mean([r["probability"] for r, _ in results])) if results else 0.0,
                              float(df["churned"].mean()), errors)

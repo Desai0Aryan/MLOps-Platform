@@ -42,6 +42,30 @@ class GroundTruth(Base):
     labeled_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ShadowPrediction(Base):
+    """What the challenger WOULD have said. Never returned to the caller."""
+    __tablename__ = "shadow_prediction"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(String(40), index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    model_version: Mapped[int] = mapped_column(Integer)
+    probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prediction: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
+class DeploymentState(Base):
+    """Single-row table: the rollout state shared by every API replica."""
+    __tablename__ = "deployment_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mode: Mapped[str] = mapped_column(String(20), default="champion_only")   # champion_only | shadow | ab
+    traffic_split: Mapped[float] = mapped_column(Float, default=0.0)
+    challenger_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
+
+
 def make_engine(url: str):
     if url.startswith("sqlite"):
         kw = {"connect_args": {"check_same_thread": False}}

@@ -2,13 +2,13 @@
 
 A mini production ML platform: **train → track → register → deploy → monitor → detect drift → retrain.**
 
-> Build status: **Part 3 / 8 complete** ✅
+> Build status: **Part 4 / 8 complete** ✅
 
 ```
 PART 1  ████████████████████████████████  Foundation: data, validation, training, tracking   ✅
 PART 2  ████████████████████████████████  Model registry + champion/challenger promotion     ✅
 PART 3  ████████████████████████████████  FastAPI serving + PostgreSQL prediction logging    ✅
-PART 4  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  A/B testing + shadow deployment
+PART 4  ████████████████████████████████  A/B testing + shadow deployment                    ✅
 PART 5  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Drift detection + performance monitoring + auto-retrain
 PART 6  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Prometheus + Grafana dashboards
 PART 7  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Docker Compose full stack
@@ -105,6 +105,45 @@ curl localhost:8000/stats
 **What the simulator already reveals:** replaying `concept_drift` traffic, the model predicts ~35% churn
 while the real rate is ~48%. That gap is exactly what Part 5's monitors will catch automatically.
 
+## What Part 4 delivers: safe rollouts
+
+```
+ register ──► safety floor ──► SHADOW ──► A/B (≤50 %) ──► statistical verdict ──► promote / stop
+              (golden AUC)    0 user risk   sticky split     SRM · log-loss · latency
+```
+
+| Capability | Where |
+|---|---|
+| **Shadow deployment**: challenger scores every request *after* the response is sent; its output is stored, never returned | `serving/app.py` (`shadow_score`) |
+| **A/B routing**: SHA-256 sticky assignment (same customer, same model, on every replica, no lookup table) | `serving/deployment.py` |
+| **Paired analysis** for shadow, **independent-arms analysis** for A/B: Welch t-test on log-loss, z-test on accuracy, bootstrap ΔAUC CIs | `experiments/analysis.py` |
+| **Sample-Ratio-Mismatch check**: detects broken randomisation before trusting any result | `ab_report` |
+| Guardrails: latency p95, shadow error rate, min labeled evidence per arm, max 50 % challenger share, golden-set safety floor | `configs/config.yaml → deployment` |
+| **Fail-safe serving**: challenger exception in A/B transparently falls back to champion; shadow errors are recorded, never raised | tested |
+| Rollout state in the DB (shared by all replicas); every change restarts the experiment clock | `DeploymentState` |
+| Optional `ADMIN_TOKEN` protecting mutating endpoints | `require_admin` |
+| Auto-conclusion: `promote` / `stop` applied to the registry + traffic in one call | `POST /experiment/conclude` |
+| 45 tests total | `tests/test_rollout.py` |
+
+```bash
+make demo-deploy                              # the full production story, in-process
+python -m mlops.cli deploy shadow             # against a running API
+python -m mlops.cli simulate --scenario concept_drift --n 1000
+python -m mlops.cli deploy analyze
+python -m mlops.cli deploy ab --split 0.2
+python -m mlops.cli deploy conclude --action auto
+```
+
+### Why primary metric = log-loss
+Concept drift mostly breaks **calibration** (the model says 34 % churn while reality is 50 %), while AUC
+barely moves. Log-loss punishes exactly that and is continuous, so a t-test applies. In the demo the champion's
+AUC drops only ~0.01-0.04 but its log-loss is **0.57 vs 0.34** for the retrained challenger.
+
+### Interview talking points
+* Shadow gives a **paired** comparison (same requests) and needs far less data than an A/B test; A/B is then only a final confirmation.
+* The golden set can't judge a model trained for *today's* world, so live evidence takes over. The golden set stays as a *safety floor*.
+* SRM, sticky bucketing, a cap on challenger exposure and fallback-on-failure are the details that separate toy A/B code from production A/B code.
+
 ## Quickstart
 
 ```bash
@@ -112,7 +151,7 @@ python -m venv .venv && source .venv/bin/activate
 make install
 make data                   # generate data/train.csv
 make train                  # full pipeline with progress bar
-make test                   # 29 tests
+make test                   # 45 tests
 make ui                     # MLflow UI on http://localhost:5000
 ```
 

@@ -71,3 +71,19 @@ serving:
   max_batch: 500
   refresh_seconds: 30          # poll the registry for a new champion (0 = off)
   database_url: sqlite:///serving.db   # override with DATABASE_URL (PostgreSQL in prod)
+
+# ---- Part 4: safe rollout (shadow + A/B) -----------------------------------
+deployment:
+  salt: churn-ab-v1                 # changing the salt re-shuffles who sees which model
+  state_cache_seconds: 2            # how long a replica caches the rollout state
+  safety_min_auc: 0.70              # hard floor on the golden set before ANY live exposure
+  max_ab_split: 0.5                 # a challenger may never get a majority of traffic
+  experiment:
+    min_labeled_per_arm: 300        # don't judge before this much labeled evidence
+    alpha: 0.05
+    srm_alpha: 0.001                # sample-ratio-mismatch check (broken randomisation)
+    max_latency_ratio: 1.5          # challenger p95 may be at most 1.5x champion p95 ...
+    max_latency_slack_ms: 25        # ... or champion p95 + 25 ms, whichever is larger
+    max_shadow_error_rate: 0.01
+    bootstrap_samples: 300
+    confidence: 0.95

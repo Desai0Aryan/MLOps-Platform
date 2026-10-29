@@ -123,6 +123,28 @@ class ModelRegistry:
                 self.client.delete_registered_model_alias(self.name, self.challenger_alias)
         return d
 
+    def safety_check(self, version: int | str) -> tuple[bool, float]:
+        """Absolute sanity floor on the golden set. Used before live exposure (shadow / A-B).
+        The strict head-to-head policy is for *direct* promotion; online evidence replaces it here."""
+        from sklearn.metrics import roc_auc_score
+        df = self._eval(); y = df[self.cfg["data"]["target"]].values
+        auc = float(roc_auc_score(y, predict_proba(self.load_model(int(version)), df, self.cfg)))
+        return auc >= self.cfg["deployment"]["safety_min_auc"], auc
+
+    def promote_version(self, version: int | str, note: str = "manual"):
+        champ = self.champion(); version = int(version)
+        if champ and int(champ.version) == version:
+            raise RegistryError(f"v{version} is already champion")
+        self._set_champion(version, replaced=int(champ.version) if champ else None, note=note)
+
+    def reject_version(self, version: int | str, reason: str):
+        version = int(version)
+        self.client.set_model_version_tag(self.name, version, "status", "rejected")
+        self.client.set_model_version_tag(self.name, version, "rejection_reason", reason)
+        cur = self.challenger()
+        if cur and int(cur.version) == version:
+            self.client.delete_registered_model_alias(self.name, self.challenger_alias)
+
     def _set_champion(self, version: int, replaced: int | None, note: str):
         c, n = self.client, self.name
         c.set_registered_model_alias(n, self.champion_alias, version)

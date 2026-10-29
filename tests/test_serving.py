@@ -88,10 +88,10 @@ def test_feedback_flow_and_live_quality(client):
 
 def test_hot_reload_swaps_model_without_restart(client, env):
     c, reg, _ = env
-    assert client.post("/reload").json() == {"changed": False, "model_version": 1}
+    r0 = client.post("/reload").json(); assert (r0["changed"], r0["model_version"]) == (False, 1)
     v2 = reg.register_run(run_training_pipeline(generate_dataset(9000, "baseline", seed=2), c).run_id)
     reg.promote_if_better(v2.version, force=True)   # this test is about hot reload, not the policy
-    assert client.post("/reload").json() == {"changed": True, "model_version": 2}
+    r1 = client.post("/reload").json(); assert (r1["changed"], r1["model_version"]) == (True, 2)
     assert client.post("/predict", json=VALID).json()["model_version"] == 2
     reg.rollback("test cleanup")                                       # leave registry as we found it
     assert client.post("/reload").json()["model_version"] == 1

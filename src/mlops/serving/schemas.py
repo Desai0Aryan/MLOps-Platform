@@ -33,6 +33,7 @@ class PredictionResponse(BaseModel):
     risk: Literal["low", "medium", "high"]
     model_name: str
     model_version: int
+    variant: Literal["champion", "challenger"] = "champion"
     latency_ms: float
 
 

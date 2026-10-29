@@ -48,3 +48,78 @@ def run_registry_demo(cfg) -> int:
     console.print(registry_table(reg))
     console.print(f"[dim]demo database: {db}[/dim]")
     return 0
+
+
+# =====================================================================================
+def run_deploy_demo(cfg) -> int:
+    """Production story:  healthy -> drift hits -> retrain on fresh data -> SHADOW -> A/B -> auto-promote."""
+    from fastapi.testclient import TestClient
+    from rich.progress import BarColumn, Progress, TextColumn
+    from .cli_deploy import render_report, render_state
+    from .serving import create_app
+    from .simulate import simulate
+
+    cfg = copy.deepcopy(cfg)
+    cfg["mlflow"]["tracking_uri"] = f"sqlite:///{os.path.join(tempfile.mkdtemp(), 'deploy_demo.db')}"
+    cfg["training"]["candidates"] = {"logistic_regression": cfg["training"]["candidates"]["logistic_regression"]}
+    cfg["serving"]["refresh_seconds"] = 0; cfg["deployment"]["state_cache_seconds"] = 0
+    cfg["deployment"]["experiment"]["min_labeled_per_arm"] = 300
+    reg = ModelRegistry(cfg)
+    stages = ["Train + deploy v1", "Healthy traffic", "Drift hits", "Retrain v2", "Shadow v2", "A/B test v2", "Auto-promote"]
+    prog = Progress(TextColumn("[bold cyan]{task.description:<22}"), BarColumn(bar_width=30), TextColumn("{task.completed}/{task.total}"), console=console)
+    task = prog.add_task(stages[0], total=len(stages), completed=0)
+
+    def step(i):
+        prog.update(task, description=stages[i], completed=i)
+        console.print(Rule(f"[bold cyan]Stage {i + 1}/{len(stages)} · {stages[i]}")); console.print(prog.get_renderable())
+
+    def sim(cl, scenario, n, seed, label=1.0):
+        return simulate(cl, scenario=scenario, n=n, label_rate=label, seed=seed)
+
+    step(0)
+    with console.status("training v1 on baseline data"):
+        v1 = reg.register_run(_train(cfg, 8000, "baseline", 1, "v1").run_id)
+    reg.promote_version(v1.version, "initial")
+    console.print(f"[green]✔[/green] v{v1.version} is champion")
+
+    with TestClient(create_app(cfg, database_url="sqlite://")) as cl:
+        step(1); s = sim(cl, "baseline", 600, 10)
+        q = cl.get("/stats").json()["live_quality"]
+        console.print(f"live accuracy [green]{q['accuracy']:.1%}[/green] · predicted churn {q['mean_predicted']:.1%} vs actual {q['actual_rate']:.1%}  (calibrated)")
+
+        step(2); sim(cl, "concept_drift", 800, 11)
+        q = cl.get("/stats", params={"window": 800}).json()["live_quality"]
+        console.print(Panel(f"A competitor launches. Same inputs, different behaviour (concept drift).\n"
+                            f"live accuracy [red]{q['accuracy']:.1%}[/red] · predicted churn {q['mean_predicted']:.1%} vs actual [red]{q['actual_rate']:.1%}[/red]\n"
+                            "[dim]AUC barely moves, but the model is now systematically under-predicting churn.[/dim]", title="⚠ production degradation", border_style="red"))
+
+        step(3)
+        with console.status("retraining on fresh, recent data"):
+            v2 = reg.register_run(_train(cfg, 8000, "concept_drift", 2, "v2").run_id)
+        ok, auc = reg.safety_check(v2.version)
+        console.print(f"v{v2.version} registered as challenger · golden-set safety check AUC {auc:.3f} → {'[green]allowed live[/green]' if ok else '[red]blocked[/red]'}")
+        console.print("[dim]Note: the OLD golden set can't tell us if v2 is better on today's world. Only live evidence can.[/dim]")
+
+        step(4)
+        cl.post("/deployment", json={"mode": "shadow"}); console.print(render_state(cl.get("/deployment").json()))
+        s = sim(cl, "concept_drift", 700, 12)
+        console.print(f"callers still received only: {s.variants} (v{list(s.versions)[0]})   ← zero user risk")
+        sh = cl.get("/experiment/analysis").json(); console.print(render_report(sh))
+
+        step(5)
+        cl.post("/deployment", json={"mode": "ab", "traffic_split": 0.3}); console.print(render_state(cl.get("/deployment").json()))
+        s = sim(cl, "concept_drift", 1800, 13)
+        console.print(f"traffic served: {s.variants}")
+        ab = cl.get("/experiment/analysis").json(); console.print(render_report(ab))
+
+        step(6)
+        res = cl.post("/experiment/conclude", json={"action": "auto"}).json()
+        console.print(Panel(f"applied: [bold green]{res['applied']}[/bold green] · champion is now v{res['champion_version']} · mode {res['mode']}",
+                            title="Auto-decision", border_style="green"))
+        s = sim(cl, "concept_drift", 600, 14)
+        q = cl.get("/stats", params={"window": 600}).json()["live_quality"]
+        console.print(f"post-promotion traffic served by {s.versions} · live accuracy [green]{q['accuracy']:.1%}[/green] · predicted {q['mean_predicted']:.1%} vs actual {q['actual_rate']:.1%}")
+        prog.update(task, description="Complete", completed=len(stages)); console.print(prog.get_renderable())
+    from .cli_registry import registry_table
+    console.print(registry_table(reg))
+    return 0

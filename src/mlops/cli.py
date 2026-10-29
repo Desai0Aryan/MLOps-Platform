@@ -115,12 +115,25 @@ def main(argv=None):
     sm.add_argument("--url", default="http://localhost:8000"); sm.add_argument("--scenario", choices=SCENARIOS, default="baseline")
     sm.add_argument("--n", type=int, default=500); sm.add_argument("--label-rate", type=float, default=0.7)
     sm.add_argument("--seed", type=int, default=123)
+    dp = sub.add_parser("deploy", help="control shadow / A-B rollouts on a running API")
+    dp.add_argument("--url", default="http://localhost:8000")
+    ds = dp.add_subparsers(dest="dcmd", required=True)
+    ds.add_parser("status"); ds.add_parser("shadow"); ds.add_parser("stop"); ds.add_parser("analyze")
+    d_ab = ds.add_parser("ab"); d_ab.add_argument("--split", type=float, default=0.1)
+    d_c = ds.add_parser("conclude"); d_c.add_argument("--action", choices=["auto", "promote", "stop"], default="auto")
+    sub.add_parser("demo-deploy", help="scripted story: drift hits -> retrain -> shadow -> A/B -> auto-promote")
     sub.add_parser("demo", help="scripted end-to-end registry demo (v1 -> v2 promoted -> v3 rejected -> rollback)")
     a = p.parse_args(argv)
     cfg = load_config(a.config)
     if a.cmd == "registry":
         from .cli_registry import run_registry_command
         return run_registry_command(a, cfg)
+    if a.cmd == "deploy":
+        from .cli_deploy import run_deploy_command
+        return run_deploy_command(a, cfg)
+    if a.cmd == "demo-deploy":
+        from .demo import run_deploy_demo
+        return run_deploy_demo(cfg)
     if a.cmd == "serve":
         import uvicorn
         uvicorn.run("mlops.serving.app:create_app", factory=True, host=a.host, port=a.port, reload=a.reload)
@@ -135,7 +148,7 @@ def main(argv=None):
             sm = simulate(client, scenario=a.scenario, n=a.n, label_rate=a.label_rate, seed=a.seed,
                           progress=lambda st, f: prog.update(task, description=st, completed=f * 100))
         console.print(Panel(f"scenario [bold]{a.scenario}[/bold] · sent {sm.sent} · labeled {sm.labeled} · errors {sm.errors}\n"
-                            f"served by versions {sm.versions}\nmean predicted P(churn) {sm.mean_probability:.3f}  vs  actual churn rate {sm.actual_churn_rate:.3f}",
+                            f"served by versions {sm.versions} · variants {sm.variants}\nmean predicted P(churn) {sm.mean_probability:.3f}  vs  actual churn rate {sm.actual_churn_rate:.3f}",
                             title="Simulation complete", border_style="green"))
         return 0
     if a.cmd == "demo":
