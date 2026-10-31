@@ -121,6 +121,13 @@ def main(argv=None):
     ds.add_parser("status"); ds.add_parser("shadow"); ds.add_parser("stop"); ds.add_parser("analyze")
     d_ab = ds.add_parser("ab"); d_ab.add_argument("--split", type=float, default=0.1)
     d_c = ds.add_parser("conclude"); d_c.add_argument("--action", choices=["auto", "promote", "stop"], default="auto")
+    mo = sub.add_parser("monitor", help="run drift + performance monitoring on the live champion")
+    mo.add_argument("--url", default="http://localhost:8000"); mo.add_argument("--html", help="also write a self-contained HTML report")
+    mo.add_argument("--history", action="store_true", help="show past monitoring runs instead")
+    ev = sub.add_parser("events", help="lifecycle timeline: every automated decision"); ev.add_argument("--url", default="http://localhost:8000"); ev.add_argument("--limit", type=int, default=30)
+    wk = sub.add_parser("worker", help="autonomous loop: monitor -> retrain -> shadow -> A/B -> promote")
+    wk.add_argument("--url", default="http://localhost:8000"); wk.add_argument("--interval", type=int, default=300); wk.add_argument("--once", action="store_true")
+    sub.add_parser("demo-lifecycle", help="THE full story: drift -> auto-retrain -> shadow -> A/B -> promote, hands-off")
     sub.add_parser("demo-deploy", help="scripted story: drift hits -> retrain -> shadow -> A/B -> auto-promote")
     sub.add_parser("demo", help="scripted end-to-end registry demo (v1 -> v2 promoted -> v3 rejected -> rollback)")
     a = p.parse_args(argv)
@@ -128,6 +135,18 @@ def main(argv=None):
     if a.cmd == "registry":
         from .cli_registry import run_registry_command
         return run_registry_command(a, cfg)
+    if a.cmd == "monitor":
+        from .cli_monitor import run_monitor_command
+        return run_monitor_command(a, cfg)
+    if a.cmd == "events":
+        from .cli_monitor import run_events_command
+        return run_events_command(a, cfg)
+    if a.cmd == "worker":
+        from .cli_monitor import run_worker_command
+        return run_worker_command(a, cfg)
+    if a.cmd == "demo-lifecycle":
+        from .demo import run_lifecycle_demo
+        return run_lifecycle_demo(cfg)
     if a.cmd == "deploy":
         from .cli_deploy import run_deploy_command
         return run_deploy_command(a, cfg)

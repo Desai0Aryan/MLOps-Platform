@@ -46,6 +46,12 @@ SCENARIOS: dict[str, DriftScenario] = {
         contract_probs=(0.75, 0.15, 0.10), payment_probs=(0.15, 0.10, 0.55, 0.20),
         usage_missing_rate=0.08,
     ),
+    "market_shift": DriftScenario(
+        "market_shift", "Regime change: new customer mix, inflation AND a competitor (covariate + concept drift).",
+        age_shift=-6, price_multiplier=1.25, support_call_multiplier=1.5,
+        contract_probs=(0.70, 0.18, 0.12), payment_probs=(0.18, 0.12, 0.50, 0.20),
+        usage_missing_rate=0.015, fiber_churn_boost=0.7, price_sensitivity_boost=0.018,
+    ),
     "concept_drift": DriftScenario(
         "concept_drift", "Competitor launches: fiber + price-sensitive customers churn far more.",
         fiber_churn_boost=1.6, price_sensitivity_boost=0.035,

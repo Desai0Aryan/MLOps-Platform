@@ -2,14 +2,14 @@
 
 A mini production ML platform: **train → track → register → deploy → monitor → detect drift → retrain.**
 
-> Build status: **Part 4 / 8 complete** ✅
+> Build status: **Part 5 / 8 complete** ✅
 
 ```
 PART 1  ████████████████████████████████  Foundation: data, validation, training, tracking   ✅
 PART 2  ████████████████████████████████  Model registry + champion/challenger promotion     ✅
 PART 3  ████████████████████████████████  FastAPI serving + PostgreSQL prediction logging    ✅
 PART 4  ████████████████████████████████  A/B testing + shadow deployment                    ✅
-PART 5  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Drift detection + performance monitoring + auto-retrain
+PART 5  ████████████████████████████████  Drift detection + performance monitoring + auto-retrain ✅
 PART 6  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Prometheus + Grafana dashboards
 PART 7  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Docker Compose full stack
 PART 8  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  GitHub Actions CI/CD + docs polish
@@ -144,6 +144,43 @@ AUC drops only ~0.01-0.04 but its log-loss is **0.57 vs 0.34** for the retrained
 * The golden set can't judge a model trained for *today's* world, so live evidence takes over. The golden set stays as a *safety floor*.
 * SRM, sticky bucketing, a cap on challenger exposure and fallback-on-failure are the details that separate toy A/B code from production A/B code.
 
+## What Part 5 delivers: monitoring + the closed loop
+
+```
+ live traffic ─► DRIFT (no labels: PSI · KS · χ² · missing-rate · prediction drift) ─┐
+ delayed labels ─► PERFORMANCE (AUC · log-loss · calibration gap · ECE) ────────────┼─► status ok/warning/critical
+                                                                                    │
+   critical ─► enough fresh LABELED data? ─► RETRAIN (validation + quality gates) ─► challenger
+            ─► SHADOW ─► A/B ─► PROMOTE   (every decision logged to `lifecycle_event`)
+```
+
+| Capability | Where |
+|---|---|
+| Per-feature **PSI + KS / chi-square + missing-rate** drift vs. *each model's own* training profile (stored in MLflow) | `monitoring/drift.py` |
+| **Prediction (score) drift**: early warning that needs no labels | `data/profile.py → build_score_profile` |
+| **Live performance** on delayed labels: AUC, log-loss, Brier, ECE, calibration gap, each vs. its training baseline | `monitoring/performance.py` |
+| Severity by *effect size* (PSI), not p-value, because with big samples everything is "significant" | `drift.py` docstring |
+| Monitoring history + append-only **lifecycle timeline** in PostgreSQL | `MonitoringRun`, `LifecycleEvent` |
+| **Orchestrator**: monitor → retrain on production data → register → shadow; advances A/B → promote on its own | `orchestrator.py`, `POST /experiment/advance` |
+| Safeguards: waits for labels, refuses contract-violating data, cooldown, quality gate, experiment timeout | tested |
+| Self-contained **HTML drift report** (light/dark) | `monitoring/report_html.py`, `docs/sample_drift_report.html` |
+| 64 tests total | `tests/test_monitoring.py` |
+
+![sample report](docs/sample_drift_report.png)
+
+```bash
+make demo-lifecycle                    # the hands-off story (≈1 min)
+python -m mlops.cli monitor --html report.html
+python -m mlops.cli worker --interval 300       # the autonomous loop, as a service
+python -m mlops.cli events                      # why did the model change?
+```
+
+### Three lessons the tests encode
+1. **Data drift ≠ model failure.** `severe_drift` trips 4 critical features, but live AUC can stay healthy. It's an early warning, not proof of damage.
+2. **Concept drift is invisible to feature monitors.** `concept_drift` leaves all 9 features stable (PSI < 0.1); only label-based calibration monitoring catches it (`test_concept_drift_is_caught_by_live_performance_only`). Real platforms need both.
+3. **Automation needs brakes.** With 8 % missing `usage_gb` the data contract fails, so the orchestrator *refuses to retrain*
+   (`test_gate_refuses_to_retrain_on_contract_violating_data`): auto-retraining on a broken pipeline would bake the bug into the model.
+
 ## Quickstart
 
 ```bash
@@ -151,7 +188,7 @@ python -m venv .venv && source .venv/bin/activate
 make install
 make data                   # generate data/train.csv
 make train                  # full pipeline with progress bar
-make test                   # 45 tests
+make test                   # 64 tests
 make ui                     # MLflow UI on http://localhost:5000
 ```
 

@@ -23,6 +23,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sklearn.metrics import roc_auc_score
 from sqlalchemy import func, select
@@ -30,7 +31,8 @@ from sqlalchemy import func, select
 from ..config import feature_columns, load_config
 from ..experiments import ab_report, load_ab_frame, load_shadow_frame, shadow_report
 from ..registry import RegistryError
-from .db import GroundTruth, PredictionLog, ShadowPrediction, init_db
+from ..monitoring import Monitor, render_html
+from .db import GroundTruth, LifecycleEvent, PredictionLog, ShadowPrediction, init_db, log_event, utcnow
 from .deployment import DeploymentManager, assign_arm
 from .schemas import FeedbackBatch, FeedbackRequest, PredictionResponse, build_request_model
 from .store import ModelStore
@@ -59,6 +61,7 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
     store = ModelStore(cfg)
     engine, SessionLocal = init_db(db_url)
     deploy = DeploymentManager(SessionLocal, dcfg["state_cache_seconds"])
+    monitor = Monitor(cfg, engine, store.registry)
 
     def refresh_all():
         out = {}
@@ -79,15 +82,27 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
                     except Exception:    # a registry blip must never kill the service
                         pass
             task = asyncio.create_task(poll())
+        mon_task = None
+        interval = int(os.getenv("MONITORING_INTERVAL_SECONDS", cfg["monitoring"]["interval_seconds"]))
+        if interval > 0:
+            async def mon_loop():
+                while True:
+                    await asyncio.sleep(interval)
+                    try:
+                        await asyncio.to_thread(monitor.run)
+                    except Exception:
+                        pass
+            mon_task = asyncio.create_task(mon_loop())
         yield
-        if task:
-            task.cancel()
+        for t in (task, mon_task):
+            if t:
+                t.cancel()
 
-    app = FastAPI(title="Churn MLOps Serving API", version="0.4.0", lifespan=lifespan,
+    app = FastAPI(title="Churn MLOps Serving API", version="0.5.0", lifespan=lifespan,
                   description="Versioned model serving with shadow deployment, A/B testing, "
                               "statistical decision-making and zero-downtime rollouts.")
     app.state.store, app.state.SessionLocal, app.state.cfg = store, SessionLocal, cfg
-    app.state.engine, app.state.deploy = engine, deploy
+    app.state.engine, app.state.deploy, app.state.monitor = engine, deploy, monitor
 
     def get_db():
         db = SessionLocal()
@@ -239,6 +254,8 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
     def set_deployment(req: DeploymentRequest):
         require_model()
         if req.mode == "champion_only":
+            if deploy.get().mode != "champion_only":
+                log_event(SessionLocal, "experiment_stopped_manually", {}, deploy.get().challenger_version)
             deploy.set("champion_only", 0.0, None); return _state_payload()
         changed, chal = store.refresh("challenger")
         if chal is None:
@@ -250,6 +267,8 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
         if req.mode == "ab" and req.traffic_split > dcfg["max_ab_split"]:
             raise HTTPException(422, f"traffic_split {req.traffic_split} exceeds the safety cap {dcfg['max_ab_split']}")
         deploy.set(req.mode, req.traffic_split if req.mode == "ab" else 0.0, chal.version)
+        log_event(SessionLocal, f"{req.mode}_started", {"traffic_split": req.traffic_split if req.mode == "ab" else 0.0,
+                                                         "safety_auc": round(auc, 4)}, chal.version)
         return {**_state_payload(), "safety_auc": round(auc, 4)}
 
     # --------------------------------------------------------------- experiments
@@ -267,6 +286,19 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
         rep, st = _analyze()
         return {"state": st.to_dict(), **rep.to_dict()}
 
+    def apply_action(action: str, v: int, verdict: str, reason: str | None = None):
+        if action == "promote":
+            try:
+                store.registry.promote_version(v, note=f"experiment verdict={verdict}")
+            except RegistryError as e:
+                raise HTTPException(409, str(e))
+            log_event(SessionLocal, "challenger_promoted", {"verdict": verdict}, v)
+        else:
+            store.registry.reject_version(v, reason or f"experiment verdict={verdict}")
+            log_event(SessionLocal, "challenger_rejected", {"verdict": verdict, "reason": reason}, v)
+        deploy.set("champion_only", 0.0, None)
+        refresh_all()
+
     @app.post("/experiment/conclude", tags=["rollout"], dependencies=[Depends(require_admin)])
     def conclude(req: ConcludeRequest):
         rep, st = _analyze()
@@ -276,16 +308,63 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
                       "unhealthy": "stop", "invalid_srm": "stop"}.get(rep.verdict, "none")
         if action == "none":
             return {"applied": "none", "verdict": rep.verdict, "recommendation": rep.recommendation}
-        if action == "promote":
-            try:
-                store.registry.promote_version(v, note=f"experiment verdict={rep.verdict}")
-            except RegistryError as e:
-                raise HTTPException(409, str(e))
-        else:
-            store.registry.reject_version(v, f"experiment verdict={rep.verdict}")
-        deploy.set("champion_only", 0.0, None)
-        refresh_all()
+        apply_action(action, v, rep.verdict)
         return {"applied": action, "challenger_version": v, "verdict": rep.verdict, **_state_payload()}
+
+    @app.post("/experiment/advance", tags=["rollout"], dependencies=[Depends(require_admin)])
+    def advance():
+        """One step of the rollout state machine: shadow -> A/B -> promote, or stop. Safe to call on a timer."""
+        st = deploy.get()
+        if st.mode == "champion_only":
+            return {"action": "none", "reason": "no experiment running"}
+        rep, st = _analyze(); v = st.challenger_version
+        age_h = (utcnow() - st.started_at).total_seconds() / 3600
+        if st.mode == "shadow":
+            if rep.verdict == "challenger_better":
+                deploy.set("ab", dcfg["auto_ab_split"], v)
+                log_event(SessionLocal, "ab_started", {"traffic_split": dcfg["auto_ab_split"], "trigger": "shadow verdict"}, v)
+                return {"action": "start_ab", "verdict": rep.verdict, "traffic_split": dcfg["auto_ab_split"]}
+            if rep.verdict in ("challenger_worse", "unhealthy"):
+                apply_action("stop", v, rep.verdict); return {"action": "stop", "verdict": rep.verdict}
+        else:
+            if rep.verdict == "promote":
+                apply_action("promote", v, rep.verdict); return {"action": "promote", "verdict": rep.verdict, "challenger_version": v}
+            if rep.verdict in ("stop", "invalid_srm"):
+                apply_action("stop", v, rep.verdict); return {"action": "stop", "verdict": rep.verdict}
+        if age_h >= dcfg["experiment"]["max_duration_hours"]:
+            apply_action("stop", v, rep.verdict, reason=f"timed out after {age_h:.0f}h without a decisive result")
+            return {"action": "stop", "verdict": rep.verdict, "reason": "timeout"}
+        return {"action": "wait", "verdict": rep.verdict, "recommendation": rep.recommendation,
+                "progress": rep.stats.get("progress")}
+
+    # --------------------------------------------------------------- monitoring
+    @app.post("/monitoring/run", tags=["monitoring"])
+    def monitoring_run():
+        require_model()
+        return monitor.run().to_dict()
+
+    @app.get("/monitoring/latest", tags=["monitoring"])
+    def monitoring_latest():
+        rep = monitor.latest()
+        if rep is None:
+            raise HTTPException(404, "no monitoring run yet; POST /monitoring/run")
+        return rep
+
+    @app.get("/monitoring/history", tags=["monitoring"])
+    def monitoring_history(limit: int = Query(50, ge=1, le=500)):
+        return monitor.history(limit)
+
+    @app.get("/monitoring/report.html", response_class=HTMLResponse, tags=["monitoring"])
+    def monitoring_report_html(refresh: bool = False):
+        rep = None if refresh else monitor.latest()
+        if rep is None:
+            require_model(); rep = monitor.run().to_dict()
+        return HTMLResponse(render_html(rep))
+
+    @app.get("/events", tags=["monitoring"])
+    def events(limit: int = Query(50, ge=1, le=500), db=Depends(get_db)):
+        q = db.scalars(select(LifecycleEvent).order_by(LifecycleEvent.id.desc()).limit(limit)).all()
+        return [dict(id=e.id, created_at=e.created_at.isoformat(), kind=e.kind, model_version=e.model_version, detail=e.detail) for e in q]
 
     # -------------------------------------------------------------------- admin
     @app.get("/model-info", tags=["ops"])

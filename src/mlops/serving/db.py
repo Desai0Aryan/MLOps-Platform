@@ -66,6 +66,35 @@ class DeploymentState(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class MonitoringRun(Base):
+    __tablename__ = "monitoring_run"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    model_version: Mapped[int] = mapped_column(Integer, index=True)
+    status: Mapped[str] = mapped_column(String(20))          # ok | warning | critical | insufficient_data
+    drift_status: Mapped[str] = mapped_column(String(20))
+    perf_status: Mapped[str] = mapped_column(String(20))
+    n_rows: Mapped[int] = mapped_column(Integer)
+    n_labeled: Mapped[int] = mapped_column(Integer)
+    max_psi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    report: Mapped[dict] = mapped_column(JSON)
+
+
+class LifecycleEvent(Base):
+    """Append-only audit timeline of everything the platform decided on its own."""
+    __tablename__ = "lifecycle_event"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    kind: Mapped[str] = mapped_column(String(50), index=True)
+    model_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+def log_event(SessionLocal, kind: str, detail: dict | None = None, model_version: int | None = None):
+    with SessionLocal() as db:
+        db.add(LifecycleEvent(kind=kind, detail=detail or {}, model_version=model_version)); db.commit()
+
+
 def make_engine(url: str):
     if url.startswith("sqlite"):
         kw = {"connect_args": {"check_same_thread": False}}

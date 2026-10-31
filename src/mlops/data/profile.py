@@ -36,3 +36,16 @@ def build_reference_profile(df: pd.DataFrame, cfg: dict) -> dict:
     if tgt in df.columns:
         prof["target_positive_rate"] = float(df[tgt].mean())
     return prof
+
+
+def build_score_profile(scores) -> dict:
+    """Distribution of the model's OWN output on held-out data. Prediction drift is often the
+    first visible symptom of upstream data problems, and needs no labels."""
+    s = np.asarray(scores, dtype=float)
+    edges = np.unique(np.quantile(s, np.linspace(0, 1, N_BINS + 1)))
+    edges[0], edges[-1] = -np.inf, np.inf
+    counts, _ = np.histogram(s, bins=edges)
+    return {"mean": float(s.mean()), "std": float(s.std()), "null_rate": 0.0,
+            "bin_edges": [None if np.isinf(e) else float(e) for e in edges],
+            "bin_probs": (counts / counts.sum()).tolist(),
+            "sample": np.random.default_rng(0).choice(s, min(2000, len(s)), replace=False).round(5).tolist()}

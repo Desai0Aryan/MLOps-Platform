@@ -28,7 +28,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from ..config import feature_columns
-from ..data.profile import build_reference_profile
+from ..data.profile import build_reference_profile, build_score_profile
 from ..data.validation import validate_dataframe, ValidationReport
 
 
@@ -129,7 +129,6 @@ def run_training_pipeline(df: pd.DataFrame, cfg: dict, *, run_name: str | None =
         X_tr, y_tr = train_df[features].astype({c: "float64" for c in num}), train_df[target]
         X_te, y_te = test_df[features].astype({c: "float64" for c in num}), test_df[target]
         profile = build_reference_profile(train_df, cfg)   # fingerprint of *training* data only
-        mlflow.log_dict(profile, "reference/reference_profile.json")
         mlflow.log_params({"data_hash": data_hash, "n_train": len(train_df), "n_test": len(test_df),
                            "seed": seed, "features": ",".join(features)})
 
@@ -155,6 +154,8 @@ def run_training_pipeline(df: pd.DataFrame, cfg: dict, *, run_name: str | None =
         emit("selecting best model", 0.80)
         best = max(cand_scores, key=lambda k: cand_scores[k]["cv_auc"])
         best_model, best_metrics = fitted[best], cand_scores[best]
+        profile["score"] = build_score_profile(best_model.predict_proba(X_te)[:, 1])   # held-out predictions
+        mlflow.log_dict(profile, "reference/reference_profile.json")
         mlflow.set_tag("best_model", best)
         mlflow.log_params({"best_model": best})
         mlflow.log_metrics({f"test_{k}": v for k, v in best_metrics.items() if k != "cv_auc"})

@@ -123,3 +123,67 @@ def run_deploy_demo(cfg) -> int:
     from .cli_registry import registry_table
     console.print(registry_table(reg))
     return 0
+
+
+# =====================================================================================
+def run_lifecycle_demo(cfg, html_path: str | None = None) -> int:
+    """Fully autonomous model lifecycle. A human only watches."""
+    from fastapi.testclient import TestClient
+    from rich.progress import BarColumn, Progress, TextColumn
+    from .cli_monitor import events_table, history_table, render_monitoring
+    from .orchestrator import Orchestrator
+    from .serving import create_app
+    from .simulate import simulate
+
+    cfg = copy.deepcopy(cfg)
+    cfg["mlflow"]["tracking_uri"] = f"sqlite:///{os.path.join(tempfile.mkdtemp(), 'lifecycle.db')}"
+    cfg["training"]["candidates"] = {"logistic_regression": cfg["training"]["candidates"]["logistic_regression"]}
+    cfg["serving"]["refresh_seconds"] = 0; cfg["deployment"]["state_cache_seconds"] = 0
+    cfg["deployment"]["experiment"]["min_labeled_per_arm"] = 300
+    cfg["retraining"].update(cooldown_hours=0, max_rows=2400)
+    reg = ModelRegistry(cfg)
+    stages = ["Deploy v1", "Healthy day", "Market shifts (no labels yet)", "Labels arrive → auto-retrain",
+              "Shadow verdict → A/B", "A/B verdict → promote", "Recovered"]
+    prog = Progress(TextColumn("[bold cyan]{task.description:<32}"), BarColumn(bar_width=28), TextColumn("{task.completed}/{task.total}"), console=console)
+    task = prog.add_task(stages[0], total=len(stages))
+
+    def step(i):
+        prog.update(task, description=stages[i], completed=i)
+        console.print(Rule(f"[bold cyan]Stage {i + 1}/{len(stages)} · {stages[i]}")); console.print(prog.get_renderable())
+
+    step(0)
+    with console.status("training v1"):
+        v1 = reg.register_run(_train(cfg, 8000, "baseline", 1, "v1").run_id)
+    reg.promote_version(v1.version, "initial"); console.print(f"[green]✔[/green] v{v1.version} is champion")
+
+    with TestClient(create_app(cfg, database_url="sqlite://")) as cl:
+        orch = Orchestrator(cfg, cl.app.state.engine, cl, reg)
+
+        def tick(show_report=True):
+            t = orch.tick()
+            if show_report:
+                console.print(render_monitoring(cl.app.state.monitor.latest()))
+            console.print(Panel(f"[bold]{t.get('action')}[/bold]  {t.get('reason', '')}"
+                                + (f"\n{t['advance']}" if "advance" in t else ""), title="🤖 orchestrator decision", border_style="cyan"))
+            return t
+
+        step(1); simulate(cl, scenario="baseline", n=800, label_rate=1.0, seed=10); tick()
+        step(2)
+        console.print("[dim]A new customer mix + inflation + a competitor. Outcomes take weeks to arrive, so no labels yet.[/dim]")
+        simulate(cl, scenario="market_shift", n=1200, label_rate=0.0, seed=11); tick()
+        step(3); simulate(cl, scenario="market_shift", n=2200, label_rate=1.0, seed=12)
+        with console.status("orchestrator retraining on production data..."):
+            t = tick(show_report=False)
+        step(4); simulate(cl, scenario="market_shift", n=900, label_rate=1.0, seed=13)
+        console.print(Panel(str(cl.get("/experiment/analysis").json()["recommendation"]), title="shadow analysis")); tick(show_report=False)
+        step(5); simulate(cl, scenario="market_shift", n=2500, label_rate=1.0, seed=14); tick(show_report=False)
+        step(6); simulate(cl, scenario="market_shift", n=1200, label_rate=1.0, seed=15); tick()
+        prog.update(task, description="Complete", completed=len(stages)); console.print(prog.get_renderable())
+        console.print(history_table(cl.app.state.monitor.history()))
+        console.print(events_table(cl.get("/events").json()))
+        if html_path:
+            from .monitoring import render_html
+            open(html_path, "w").write(render_html(cl.app.state.monitor.latest())); console.print(f"[green]✔[/green] wrote {html_path}")
+    from .cli_registry import registry_table
+    console.print(registry_table(reg))
+    return 0

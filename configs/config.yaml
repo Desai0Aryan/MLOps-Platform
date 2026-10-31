@@ -78,6 +78,7 @@ deployment:
   state_cache_seconds: 2            # how long a replica caches the rollout state
   safety_min_auc: 0.70              # hard floor on the golden set before ANY live exposure
   max_ab_split: 0.5                 # a challenger may never get a majority of traffic
+  auto_ab_split: 0.2                # share used when the controller advances shadow -> A/B
   experiment:
     min_labeled_per_arm: 300        # don't judge before this much labeled evidence
     alpha: 0.05
@@ -85,5 +86,35 @@ deployment:
     max_latency_ratio: 1.5          # challenger p95 may be at most 1.5x champion p95 ...
     max_latency_slack_ms: 25        # ... or champion p95 + 25 ms, whichever is larger
     max_shadow_error_rate: 0.01
+    max_duration_hours: 72          # an inconclusive experiment is stopped, not left running forever
     bootstrap_samples: 300
     confidence: 0.95
+
+# ---- Part 5: monitoring + automated retraining -----------------------------
+monitoring:
+  window_rows: 1500          # most recent champion predictions examined for DATA drift (no labels needed)
+  min_rows: 200
+  interval_seconds: 0        # >0 => the API runs the monitor itself; the worker normally does (env MONITORING_INTERVAL_SECONDS)
+  drift:
+    psi_warn: 0.10           # industry rule of thumb: <0.1 stable, 0.1-0.25 moderate, >0.25 major shift
+    psi_crit: 0.25
+    ks_alpha: 0.01
+    null_delta_warn: 0.03    # change in missing-value rate (absolute)
+    null_delta_crit: 0.10
+    critical_feature_share: 0.2   # drift is "critical" when >= 20 % of features are critical
+  performance:               # needs delayed labels
+    window_labeled: 1000
+    min_labeled: 150
+    auc_drop_warn: 0.03
+    auc_drop_crit: 0.07
+    calib_gap_warn: 0.05     # |mean predicted churn - actual churn rate|
+    calib_gap_crit: 0.10
+    logloss_increase_warn: 0.10
+    logloss_increase_crit: 0.25
+
+retraining:
+  enabled: true
+  min_labeled_rows: 1500     # never retrain on a thin slice of reality
+  max_rows: 6000             # most recent labeled production rows
+  lookback_days: 30
+  cooldown_hours: 24         # don't thrash: at most one automatic retrain per cooldown
