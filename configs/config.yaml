@@ -70,6 +70,7 @@ serving:
   risk_bands: [0.30, 0.60]     # low < 0.30 <= medium < 0.60 <= high
   max_batch: 500
   refresh_seconds: 30          # poll the registry for a new champion (0 = off)
+  metrics_cache_seconds: 5     # how long platform-state gauges are cached between scrapes
   database_url: sqlite:///serving.db   # override with DATABASE_URL (PostgreSQL in prod)
 
 # ---- Part 4: safe rollout (shadow + A/B) -----------------------------------

@@ -1,0 +1,115 @@
+# Alert rules. Severity: critical = page someone, warning = look today, info = FYI.
+# Every rule carries a runbook-style description so the alert explains itself.
+groups:
+  - name: mlops-service
+    rules:
+      - alert: ApiDown
+        expr: up{job="mlops-api"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "Churn API is down"
+          description: "Prometheus cannot scrape {{ $labels.instance }} for 1 minute. Check the container and /health."
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(mlops_http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(mlops_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "More than 5% of requests fail"
+          description: "5xx ratio is {{ $value | humanizePercentage }}. Check API logs and /ready; the champion model may have failed to load."
+
+      - alert: HighPredictionLatencyP95
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(mlops_http_request_duration_seconds_bucket{path=~"/predict.*"}[5m]))) > 0.5
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "p95 prediction latency above 500 ms"
+          description: "p95 is {{ $value | humanizeDuration }}. Check CPU saturation and whether a heavier challenger is live."
+
+      - alert: NoPredictionTraffic
+        expr: sum(rate(mlops_predictions_total[10m])) == 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "No predictions served for 15 minutes"
+          description: "The API is up but nothing is calling it. An upstream integration may be broken."
+
+      - alert: ChallengerFallbacks
+        expr: increase(mlops_prediction_errors_total{stage="challenger_fallback"}[10m]) > 0
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: "Challenger is failing during A/B; requests fall back to the champion"
+          description: "Users are unaffected (fallback works), but the experiment is invalid. Stop it: `mlops deploy stop`."
+
+      - alert: ShadowErrors
+        expr: increase(mlops_prediction_errors_total{stage="shadow"}[10m]) > 0
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: "Shadow challenger is erroring on mirrored traffic"
+          description: "No user impact. The challenger is not safe to promote; inspect its inputs/model."
+
+  - name: mlops-model
+    rules:
+      - alert: ModelDriftCritical
+        expr: mlops_monitoring_status == 2
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Model monitor reports CRITICAL"
+          description: "Drift and/or live quality are outside tolerance for model v{{ with query \"mlops_monitoring_model_version\" }}{{ . | first | value }}{{ end }}. The worker will retrain if labeled data is available; see `mlops events`."
+
+      - alert: FeatureDriftHigh
+        expr: max by (feature) (mlops_drift_psi) > 0.25
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Feature {{ $labels.feature }} drifted (PSI {{ $value | printf \"%.2f\" }})"
+          description: "PSI above 0.25 means a major population shift versus the training data."
+
+      - alert: CalibrationGapHigh
+        expr: abs(mlops_performance_metric{metric="calibration_gap"}) > 0.10
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "Predicted churn rate is {{ $value | humanizePercentage }} away from reality"
+          description: "Classic concept-drift signature: ranking (AUC) may look fine while probabilities are wrong."
+
+      - alert: AucDegraded
+        expr: |
+          mlops_performance_baseline{metric="roc_auc"} - mlops_performance_metric{metric="roc_auc"} > 0.07
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "Live AUC is more than 0.07 below its training value"
+          description: "The model ranks customers materially worse than at training time."
+
+      - alert: MonitoringStale
+        expr: time() - mlops_monitoring_last_run_timestamp_seconds > 3600
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Monitoring has not run for over an hour"
+          description: "The worker may be down. Without it, drift goes unnoticed and no retraining happens."
+
+      - alert: AutoRetrainBlocked
+        expr: |
+          time() - mlops_lifecycle_last_event_timestamp_seconds{kind=~"retrain_rejected_.*|shadow_start_failed"} < 3600
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: "Automatic retraining was blocked ({{ $labels.kind }})"
+          description: "Usually the production data violates the data contract. A human should look; do not force it."
+
+      - alert: ModelPromoted
+        expr: time() - mlops_lifecycle_last_event_timestamp_seconds{kind="challenger_promoted"} < 600
+        for: 0m
+        labels: {severity: info}
+        annotations:
+          summary: "A new champion was promoted automatically"
+          description: "See the Rollouts dashboard and `mlops events` for the evidence."

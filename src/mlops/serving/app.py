@@ -23,7 +23,8 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 from sklearn.metrics import roc_auc_score
 from sqlalchemy import func, select
@@ -35,6 +36,7 @@ from ..monitoring import Monitor, render_html
 from .db import GroundTruth, LifecycleEvent, PredictionLog, ShadowPrediction, init_db, log_event, utcnow
 from .deployment import DeploymentManager, assign_arm
 from .schemas import FeedbackBatch, FeedbackRequest, PredictionResponse, build_request_model
+from .metrics import Metrics, PlatformCollector
 from .store import ModelStore
 
 
@@ -62,6 +64,8 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
     engine, SessionLocal = init_db(db_url)
     deploy = DeploymentManager(SessionLocal, dcfg["state_cache_seconds"])
     monitor = Monitor(cfg, engine, store.registry)
+    metrics = Metrics()
+    metrics.registry.register(PlatformCollector(store, deploy, monitor, SessionLocal, ttl=scfg.get("metrics_cache_seconds", 5)))
 
     def refresh_all():
         out = {}
@@ -98,11 +102,11 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
             if t:
                 t.cancel()
 
-    app = FastAPI(title="Churn MLOps Serving API", version="0.5.0", lifespan=lifespan,
+    app = FastAPI(title="Churn MLOps Serving API", version="0.6.0", lifespan=lifespan,
                   description="Versioned model serving with shadow deployment, A/B testing, "
                               "statistical decision-making and zero-downtime rollouts.")
     app.state.store, app.state.SessionLocal, app.state.cfg = store, SessionLocal, cfg
-    app.state.engine, app.state.deploy, app.state.monitor = engine, deploy, monitor
+    app.state.engine, app.state.deploy, app.state.monitor, app.state.metrics = engine, deploy, monitor, metrics
 
     def get_db():
         db = SessionLocal()
@@ -118,10 +122,18 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
 
     @app.middleware("http")
     async def timing(request: Request, call_next):
-        t0 = time.perf_counter()
-        resp = await call_next(request)
-        resp.headers["X-Process-Time-ms"] = f"{(time.perf_counter() - t0) * 1000:.2f}"
-        return resp
+        t0 = time.perf_counter(); status = 500
+        try:
+            resp = await call_next(request)
+            status = resp.status_code
+            resp.headers["X-Process-Time-ms"] = f"{(time.perf_counter() - t0) * 1000:.2f}"
+            return resp
+        finally:
+            route = request.scope.get("route")
+            path = route.path if route else "unmatched"        # template, never the raw URL: bounded label cardinality
+            if path != "/metrics":
+                metrics.http_requests.labels(request.method, path, str(status)).inc()
+                metrics.http_latency.labels(request.method, path).observe(time.perf_counter() - t0)
 
     # ------------------------------------------------------------------ helpers
     def require_model():
@@ -157,7 +169,10 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
                                     prediction=int(p >= scfg["threshold"]), latency_ms=round(ms, 3))
                    for i, p in zip(ids, proba)]
         except Exception as e:
+            metrics.errors.labels("shadow").inc(len(ids)); metrics.shadow.labels("error").inc(len(ids))
             out = [ShadowPrediction(request_id=i, model_version=lm.version, error=f"{type(e).__name__}: {e}"[:300]) for i in ids]
+        else:
+            metrics.shadow.labels("ok").inc(len(ids))
         with SessionLocal() as db:
             db.add_all(out); db.commit()
 
@@ -179,10 +194,15 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
             try:
                 proba, ms = run_inference(lm, [rows[i] for i in idx])
             except Exception:
+                metrics.errors.labels("champion" if arm == "champion" else "challenger_fallback").inc()
                 if arm == "champion":
                     raise
                 lm, role = champ, "champion"               # challenger failed: fall back, never fail the request
                 proba, ms = run_inference(lm, [rows[i] for i in idx])
+            metrics.predictions.labels(str(lm.version), role).inc(len(idx))
+            metrics.inference_latency.labels(role).observe(ms / 1000)
+            for p in proba:
+                metrics.probability.labels(str(lm.version)).observe(float(p))
             for j, i in enumerate(idx):
                 recs[i] = make_record(lm, role, rows[i], ids[i], proba[j], ms)
         bg.add_task(persist, recs)
@@ -226,6 +246,7 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
                 missing.append(it.request_id); continue
             db.merge(GroundTruth(request_id=it.request_id, actual=it.actual)); ok += 1
         db.commit()
+        metrics.feedback.inc(ok)
         return ok, missing
 
     @app.post("/feedback", tags=["feedback"])
@@ -367,6 +388,10 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
         return [dict(id=e.id, created_at=e.created_at.isoformat(), kind=e.kind, model_version=e.model_version, detail=e.detail) for e in q]
 
     # -------------------------------------------------------------------- admin
+    @app.get("/metrics", include_in_schema=False)
+    def prometheus_metrics():
+        return Response(generate_latest(metrics.registry), media_type=CONTENT_TYPE_LATEST)
+
     @app.get("/model-info", tags=["ops"])
     def model_info():
         lm = require_model()

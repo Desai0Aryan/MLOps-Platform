@@ -2,7 +2,7 @@
 
 A mini production ML platform: **train → track → register → deploy → monitor → detect drift → retrain.**
 
-> Build status: **Part 5 / 8 complete** ✅
+> Build status: **Part 6 / 8 complete** ✅
 
 ```
 PART 1  ████████████████████████████████  Foundation: data, validation, training, tracking   ✅
@@ -10,7 +10,7 @@ PART 2  ████████████████████████
 PART 3  ████████████████████████████████  FastAPI serving + PostgreSQL prediction logging    ✅
 PART 4  ████████████████████████████████  A/B testing + shadow deployment                    ✅
 PART 5  ████████████████████████████████  Drift detection + performance monitoring + auto-retrain ✅
-PART 6  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Prometheus + Grafana dashboards
+PART 6  ████████████████████████████████  Prometheus + Grafana dashboards                    ✅
 PART 7  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Docker Compose full stack
 PART 8  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  GitHub Actions CI/CD + docs polish
 ```
@@ -181,6 +181,31 @@ python -m mlops.cli events                      # why did the model change?
 3. **Automation needs brakes.** With 8 % missing `usage_gb` the data contract fails, so the orchestrator *refuses to retrain*
    (`test_gate_refuses_to_retrain_on_contract_violating_data`): auto-retraining on a broken pipeline would bake the bug into the model.
 
+## What Part 6 delivers: observability
+
+| Capability | Where |
+|---|---|
+| `/metrics`: request rate/latency histograms, predictions by version+variant, probability distribution, inference time, error stages, shadow + feedback counters, process CPU/memory | `serving/metrics.py` |
+| **Platform-state collector** computed at scrape time from the DB: drift PSI per feature, monitor verdicts, live AUC/calibration vs training baseline, rollout mode + A/B split, loaded model versions, lifecycle events | `PlatformCollector` |
+| **13 alert rules** with severity + self-explaining descriptions | `deploy/prometheus/alerts.yml` |
+| **3 provisioned Grafana dashboards** (40 panels): service health, model quality & drift, rollouts & lifecycle, with annotations on promotions / retrains | `deploy/grafana/`, `scripts/build_dashboards.py` |
+| `docker-compose.observability.yml`: Prometheus + Grafana in one command | repo root |
+| Traffic generator that injects drift mid-run to light up the dashboards | `simulate --loop-seconds 180 --drift-after 90` |
+| 78 tests total (incl. "every metric used in a dashboard/alert is really exported") | `tests/test_metrics.py` |
+
+```bash
+make observability-up && make serve        # then in another shell:
+make traffic                               # watch PSI climb, status flip to CRITICAL, worker retrain, new champion
+```
+See [`deploy/README.md`](deploy/README.md) for the dashboard guide and alert catalogue.
+
+**How it was verified:** every alert rule and all 54 dashboard/annotation queries pass the real `promtool`; I then ran the real
+API + a real Prometheus (2 s scrape) + the real worker through the full drift → retrain → shadow → A/B → promote cycle and executed every
+dashboard query against it: **48/54 returned data, 0 errors** (the other 6 are legitimately empty: no failures, no challenger after
+promotion, event-only annotations). Prometheus counted exactly the 9,400 predictions I sent, and `ModelPromoted` fired. That run caught two real
+dashboard bugs (a path filter that missed `/predict/batch`; an error-rate stat that showed "n/a" instead of 0 %).
+Not verifiable in my sandbox: rendering inside Grafana itself and the Docker compose files, since neither Grafana nor Docker is available there.
+
 ## Quickstart
 
 ```bash
@@ -188,7 +213,7 @@ python -m venv .venv && source .venv/bin/activate
 make install
 make data                   # generate data/train.csv
 make train                  # full pipeline with progress bar
-make test                   # 64 tests
+make test                   # 78 tests
 make ui                     # MLflow UI on http://localhost:5000
 ```
 

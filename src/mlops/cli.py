@@ -115,6 +115,10 @@ def main(argv=None):
     sm.add_argument("--url", default="http://localhost:8000"); sm.add_argument("--scenario", choices=SCENARIOS, default="baseline")
     sm.add_argument("--n", type=int, default=500); sm.add_argument("--label-rate", type=float, default=0.7)
     sm.add_argument("--seed", type=int, default=123)
+    sm.add_argument("--loop-seconds", type=int, default=0, help="keep sending batches for this long (feeds live dashboards)")
+    sm.add_argument("--pause", type=float, default=2.0, help="seconds between batches in loop mode")
+    sm.add_argument("--drift-after", type=int, default=0, help="loop mode: switch to --drift-scenario after N seconds")
+    sm.add_argument("--drift-scenario", choices=SCENARIOS, default="market_shift")
     dp = sub.add_parser("deploy", help="control shadow / A-B rollouts on a running API")
     dp.add_argument("--url", default="http://localhost:8000")
     ds = dp.add_subparsers(dest="dcmd", required=True)
@@ -156,6 +160,18 @@ def main(argv=None):
     if a.cmd == "serve":
         import uvicorn
         uvicorn.run("mlops.serving.app:create_app", factory=True, host=a.host, port=a.port, reload=a.reload)
+        return 0
+    if a.cmd == "simulate" and a.loop_seconds:
+        import httpx, time as _t
+        from .simulate import simulate
+        t0, i = _t.time(), 0
+        with httpx.Client(base_url=a.url, timeout=60) as client:
+            while _t.time() - t0 < a.loop_seconds:
+                el = _t.time() - t0
+                scen = a.drift_scenario if (a.drift_after and el >= a.drift_after) else a.scenario
+                sm = simulate(client, scenario=scen, n=a.n, label_rate=a.label_rate, seed=a.seed + i)
+                console.print(f"[dim]{el:5.0f}s[/dim] {scen:13s} sent {sm.sent} · variants {sm.variants} · predicted {sm.mean_probability:.2f} vs actual {sm.actual_churn_rate:.2f}")
+                i += 1; _t.sleep(a.pause)
         return 0
     if a.cmd == "simulate":
         import httpx
