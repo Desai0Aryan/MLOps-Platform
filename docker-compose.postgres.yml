@@ -1,7 +1,7 @@
 # Quick local PostgreSQL for the prediction log:
 #   docker compose -f docker-compose.postgres.yml up -d
 #   export DATABASE_URL=postgresql+psycopg2://mlops:mlops@localhost:5432/mlops
-# (The full stack arrives in Part 7.)
+# (The complete stack is docker-compose.yml.)
 services:
   postgres:
     image: postgres:16-alpine

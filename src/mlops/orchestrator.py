@@ -26,6 +26,7 @@ from sqlalchemy.orm import sessionmaker
 from .config import feature_columns
 from .monitoring import Monitor
 from .registry import ModelRegistry
+from .retention import prune_old_data
 from .serving.db import GroundTruth, LifecycleEvent, PredictionLog, log_event, utcnow
 from .training import DataValidationError, QualityGateError, run_training_pipeline
 
@@ -55,6 +56,7 @@ class Orchestrator:
         self.Session = sessionmaker(engine, expire_on_commit=False)
         self.registry = registry or ModelRegistry(cfg)
         self.monitor = Monitor(cfg, engine, self.registry)
+        self._last_prune = 0.0
 
     # -------------------------------------------------------------- helpers
     def _last_event(self, *kinds):
@@ -74,6 +76,7 @@ class Orchestrator:
     # ----------------------------------------------------------------- tick
     def tick(self) -> dict:
         out: dict = {"steps": []}
+        self._maybe_prune(out)
         champ = self.registry.champion()
         if champ is None:
             return {"action": "idle", "reason": "no champion model"}
@@ -93,6 +96,19 @@ class Orchestrator:
         if not self.cfg["retraining"]["enabled"]:
             out["action"] = "retraining_disabled"; return out
         return {**out, **self._maybe_retrain(rep)}
+
+    def _maybe_prune(self, out: dict):
+        import time
+        if time.time() - self._last_prune < 3600:
+            return
+        self._last_prune = time.time()
+        try:
+            pruned = prune_old_data(self.engine, self.cfg)
+            if any(pruned.values()):
+                log_event(self.Session, "retention_pruned", {k: v for k, v in pruned.items() if v})
+                out["pruned"] = pruned
+        except Exception as e:           # housekeeping must never block the control loop
+            out["prune_error"] = f"{type(e).__name__}: {e}"
 
     # -------------------------------------------------------------- retrain
     def _maybe_retrain(self, rep) -> dict:

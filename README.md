@@ -2,7 +2,7 @@
 
 A mini production ML platform: **train → track → register → deploy → monitor → detect drift → retrain.**
 
-> Build status: **Part 6 / 8 complete** ✅
+> Build status: **Part 7 / 8 complete** ✅
 
 ```
 PART 1  ████████████████████████████████  Foundation: data, validation, training, tracking   ✅
@@ -11,7 +11,7 @@ PART 3  ████████████████████████
 PART 4  ████████████████████████████████  A/B testing + shadow deployment                    ✅
 PART 5  ████████████████████████████████  Drift detection + performance monitoring + auto-retrain ✅
 PART 6  ████████████████████████████████  Prometheus + Grafana dashboards                    ✅
-PART 7  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Docker Compose full stack
+PART 7  ████████████████████████████████  Docker Compose full stack                          ✅
 PART 8  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  GitHub Actions CI/CD + docs polish
 ```
 
@@ -206,14 +206,67 @@ promotion, event-only annotations). Prometheus counted exactly the 9,400 predict
 dashboard bugs (a path filter that missed `/predict/batch`; an error-rate stat that showed "n/a" instead of 0 %).
 Not verifiable in my sandbox: rendering inside Grafana itself and the Docker compose files, since neither Grafana nor Docker is available there.
 
-## Quickstart
+## What Part 7 delivers: one command, whole platform
+
+```mermaid
+flowchart LR
+  subgraph data
+    PG[(postgres 16<br/>mlops + mlflow DBs)]
+  end
+  ML[mlflow server<br/>proxied artifacts] --> PG
+  BOOT[bootstrap job<br/>trains + promotes v1] --> ML
+  API[api :8000<br/>FastAPI] --> PG
+  API --> ML
+  WORK[worker<br/>monitor → retrain → A/B → promote] --> API
+  WORK --> PG
+  WORK --> ML
+  PROM[prometheus] -- scrapes /metrics --> API
+  GRAF[grafana] --> PROM
+  TRAFFIC[traffic generator<br/>profile: demo] --> API
+  BOOT -. completed_successfully .-> API
+```
+
+```bash
+cp .env.example .env            # change ADMIN_TOKEN + passwords
+make up                         # builds one image, starts 7 services in dependency order
+make up-demo                    # + traffic generator that drifts after 2 min and a fast worker: watch it heal itself
+```
+| URL | What |
+|---|---|
+| http://localhost:8000/docs | API (mutating endpoints need `X-Admin-Token`) |
+| http://localhost:3000 | Grafana: 3 dashboards pre-provisioned |
+| http://localhost:5000 | MLflow: experiments, registry, artifacts |
+| http://localhost:9090 | Prometheus + alert rules |
+
+| Design choice | Why |
+|---|---|
+| **One image, many roles** (api / worker / mlflow / bootstrap / traffic) | single build, single dependency set, multi-stage + non-root + healthcheck |
+| **`bootstrap` one-shot job** gates the API (`service_completed_successfully`) | the API never starts without a model; idempotent, so safe on every `up` |
+| **MLflow `--serve-artifacts`** | API/worker upload & download artifacts over HTTP: no shared volume, no S3 needed. `--allowed-hosts` set because MLflow 3 rejects unknown Host headers |
+| **Separate databases** (`mlops`, `mlflow`) in one Postgres | independent schemas/backups; created by an init script |
+| **Advisory lock around `CREATE TABLE`** | several replicas can boot at once without racing |
+| **Retention job** (`retention:` in config) | prediction log / monitoring runs / shadow rows no longer grow forever; refuses a policy that would starve retraining |
+| Postgres, MLflow, Prometheus bound to `127.0.0.1` | only the API and Grafana are reachable from the network |
+
+### How it was verified (and what wasn't)
+There is no Docker daemon in my build sandbox, so I verified everything *except the container runtime itself*:
+* the real **`docker compose config`** accepts the file (default + `demo` profile) and **`hadolint`** passes the Dockerfile
+* a **faithful rehearsal**: each service's command + environment was extracted from the *resolved compose file* and run as a process against a
+  **real PostgreSQL 16**, a **real MLflow server** (same flags, proxied artifacts), the worker as configured, and the real Prometheus with the real
+  config, using the same hostnames. Result: bootstrap (default config, 23 s) → API → worker auto-ran retrain → shadow → A/B → promote; **9,000
+  predictions in Postgres**, admin-token enforced (401/200), v2 still served after an API restart, 18 artifacts uploaded through the MLflow proxy,
+  and the `ApiDown` alert went *pending* during my deliberate restart
+* **`tests/test_postgres.py`** (real Postgres, incl. 6 replicas creating tables simultaneously) and 10 static checks on the compose/Dockerfile
+**Not verified:** `docker build` itself, container healthchecks, and named-volume ownership at runtime. Run `make up` and check `docker compose ps`.
+
+## Quickstart (local, no Docker)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 make install
 make data                   # generate data/train.csv
 make train                  # full pipeline with progress bar
-make test                   # 78 tests
+make test                   # 95 tests: 92 run anywhere, 3 need Postgres (make test-postgres)
 make ui                     # MLflow UI on http://localhost:5000
 ```
 

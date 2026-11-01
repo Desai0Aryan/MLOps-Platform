@@ -2,7 +2,7 @@
 #   docker compose -f docker-compose.observability.yml up -d
 #   Grafana    http://localhost:3000   (admin / admin)  -> folder "MLOps"
 #   Prometheus http://localhost:9090   (Alerts tab shows the rules)
-# The full stack (API + worker + MLflow + Postgres + these) arrives in Part 7.
+# The complete stack (API + worker + MLflow + Postgres + these) is docker-compose.yml.
 services:
   prometheus:
     image: prom/prometheus:v2.54.1

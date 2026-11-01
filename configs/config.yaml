@@ -119,3 +119,9 @@ retraining:
   max_rows: 6000             # most recent labeled production rows
   lookback_days: 30
   cooldown_hours: 24         # don't thrash: at most one automatic retrain per cooldown
+
+# ---- Part 7: data retention (the worker prunes hourly; keeps the database from growing forever) ----
+retention:
+  monitoring_runs_days: 30
+  shadow_days: 14
+  predictions_days: 90         # must be >= retraining.lookback_days; their labels are removed with them

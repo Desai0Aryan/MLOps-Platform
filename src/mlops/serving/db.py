@@ -6,7 +6,7 @@ This is the data Part 5 uses for drift detection and live performance monitoring
 """
 from __future__ import annotations
 import datetime as dt
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, create_engine
+from sqlalchemy import JSON, DateTime, text, Float, ForeignKey, Index, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -106,5 +106,12 @@ def make_engine(url: str):
 
 def init_db(url: str):
     engine = make_engine(url)
-    Base.metadata.create_all(engine)
+    if engine.dialect.name == "postgresql":
+        # Several replicas can boot simultaneously: serialise CREATE TABLE with an advisory lock
+        # (released automatically at the end of the transaction). Real migrations (Alembic) are the next step up.
+        with engine.begin() as conn:
+            conn.execute(text("SELECT pg_advisory_xact_lock(727274)"))
+            Base.metadata.create_all(conn)
+    else:
+        Base.metadata.create_all(engine)
     return engine, sessionmaker(engine, expire_on_commit=False)

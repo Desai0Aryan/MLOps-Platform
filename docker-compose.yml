@@ -1,0 +1,122 @@
+# End-to-end MLOps platform.   docker compose up -d --build
+#
+#   API + docs     http://localhost:8000/docs        Grafana     http://localhost:3000  (admin / $GRAFANA_ADMIN_PASSWORD)
+#   MLflow UI      http://localhost:5000             Prometheus  http://localhost:9090
+#
+# Startup order (enforced by healthchecks):  postgres -> mlflow -> bootstrap (trains v1) -> api -> worker / prometheus -> grafana
+name: mlops-platform
+
+x-app: &app
+  build: {context: ., dockerfile: Dockerfile}
+  image: mlops-platform:${MLOPS_VERSION:-latest}
+  restart: unless-stopped
+  environment: &app-env
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+    DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-mlops}:${POSTGRES_PASSWORD:-mlops}@postgres:5432/mlops
+    ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mlops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlops}
+      POSTGRES_DB: mlops
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    ports: ["127.0.0.1:5432:5432"]          # localhost only: handy for psql, never exposed to the network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mlops} -d mlops"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mlflow:
+    <<: *app
+    command:
+      - mlflow
+      - server
+      - --host=0.0.0.0
+      - --port=5000
+      - --backend-store-uri=postgresql+psycopg2://${POSTGRES_USER:-mlops}:${POSTGRES_PASSWORD:-mlops}@postgres:5432/mlflow
+      - --artifacts-destination=/mlflow/artifacts
+      - --serve-artifacts                      # clients upload/download artifacts through the server: no shared volume needed
+      - --allowed-hosts=mlflow:5000,mlflow,localhost:5000,localhost,127.0.0.1:5000   # MLflow 3 rejects unknown Host headers
+    environment:
+      GIT_PYTHON_REFRESH: quiet
+    volumes: [mlflow_artifacts:/mlflow/artifacts]
+    ports: ["127.0.0.1:5000:5000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health', timeout=2).status == 200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  bootstrap:                                  # one-shot job: trains + promotes v1 if no champion exists (idempotent)
+    <<: *app
+    restart: "no"
+    command: ["python", "-m", "mlops.cli", "bootstrap"]
+    healthcheck: {disable: true}
+    depends_on:
+      mlflow: {condition: service_healthy}
+
+  api:
+    <<: *app
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      mlflow: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+
+  worker:                                     # the autonomous loop: monitor -> retrain -> shadow -> A/B -> promote
+    <<: *app
+    command: ["python", "-m", "mlops.cli", "worker", "--url", "http://api:8000", "--interval", "${WORKER_INTERVAL:-60}"]
+    healthcheck: {disable: true}
+    depends_on:
+      api: {condition: service_healthy}
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--storage.tsdb.retention.time=15d"]
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    depends_on:
+      api: {condition: service_healthy}
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/mlops-quality.json
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+
+  traffic:                                    # optional demo: `docker compose --profile demo up -d`
+    <<: *app
+    profiles: ["demo"]
+    command: ["python", "-m", "mlops.cli", "simulate", "--url", "http://api:8000", "--n", "150", "--loop-seconds", "86400",
+              "--pause", "2", "--drift-after", "${DRIFT_AFTER_SECONDS:-300}", "--drift-scenario", "market_shift"]
+    healthcheck: {disable: true}
+    depends_on:
+      api: {condition: service_healthy}
+
+volumes:
+  pgdata:
+  mlflow_artifacts:
+  prometheus_data:
+  grafana_data:

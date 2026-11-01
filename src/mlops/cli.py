@@ -131,6 +131,8 @@ def main(argv=None):
     ev = sub.add_parser("events", help="lifecycle timeline: every automated decision"); ev.add_argument("--url", default="http://localhost:8000"); ev.add_argument("--limit", type=int, default=30)
     wk = sub.add_parser("worker", help="autonomous loop: monitor -> retrain -> shadow -> A/B -> promote")
     wk.add_argument("--url", default="http://localhost:8000"); wk.add_argument("--interval", type=int, default=300); wk.add_argument("--once", action="store_true")
+    bs = sub.add_parser("bootstrap", help="idempotent first run: wait for MLflow, train + promote an initial champion if none exists")
+    bs.add_argument("--rows", type=int); bs.add_argument("--timeout", type=int, default=120)
     sub.add_parser("demo-lifecycle", help="THE full story: drift -> auto-retrain -> shadow -> A/B -> promote, hands-off")
     sub.add_parser("demo-deploy", help="scripted story: drift hits -> retrain -> shadow -> A/B -> auto-promote")
     sub.add_parser("demo", help="scripted end-to-end registry demo (v1 -> v2 promoted -> v3 rejected -> rollback)")
@@ -139,6 +141,10 @@ def main(argv=None):
     if a.cmd == "registry":
         from .cli_registry import run_registry_command
         return run_registry_command(a, cfg)
+    if a.cmd == "bootstrap":
+        from .bootstrap import bootstrap
+        bootstrap(cfg, rows=a.rows, timeout=a.timeout, log=lambda m: console.print(f"[cyan]bootstrap[/cyan] {m}"))
+        return 0
     if a.cmd == "monitor":
         from .cli_monitor import run_monitor_command
         return run_monitor_command(a, cfg)

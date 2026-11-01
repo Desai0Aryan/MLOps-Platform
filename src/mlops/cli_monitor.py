@@ -95,10 +95,10 @@ def run_events_command(a, cfg) -> int:
 
 def run_worker_command(a, cfg) -> int:
     from .orchestrator import Orchestrator
-    from .serving.db import make_engine
+    from .serving.db import init_db
     url = os.getenv("DATABASE_URL") or cfg["serving"]["database_url"]
     with _client(a.url) as api:
-        orch = Orchestrator(cfg, make_engine(url), api)
+        orch = Orchestrator(cfg, init_db(url)[0], api)
         console.print(Panel(f"api [bold]{a.url}[/bold] · interval {a.interval}s · retraining "
                             f"{'on' if cfg['retraining']['enabled'] else 'off'}", title="⚙ MLOps worker", border_style="cyan"))
         while True:
