@@ -7,14 +7,12 @@ Every run is fully reproducible: data hash, config, seed, git-independent
 reference profile and validation report are stored with the model.
 """
 from __future__ import annotations
-import hashlib, json, tempfile, time
+import hashlib, time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 import mlflow
 import mlflow.sklearn
-import numpy as np
 import pandas as pd
 from mlflow.models import infer_signature
 from sklearn.compose import ColumnTransformer

@@ -9,7 +9,6 @@ replaced (`replaced_version`), so rollback is just "walk the chain back one step
 """
 from __future__ import annotations
 import json, time
-from functools import lru_cache
 
 import mlflow
 import mlflow.sklearn
@@ -104,7 +103,7 @@ class ModelRegistry:
         return compare_models(cand_p, champ_p, y, self.cfg)
 
     def promote_if_better(self, version: int | str, *, force: bool = False) -> PromotionDecision:
-        version = int(version); mv = self.get_version(version)
+        version = int(version); self.get_version(version)   # raises RegistryError for unknown versions
         champ = self.champion()
         if champ and int(champ.version) == version:
             raise RegistryError(f"v{version} is already champion")

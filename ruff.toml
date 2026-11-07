@@ -1,0 +1,19 @@
+# Lint for real bugs (unused/undefined names, shadowing, bad comparisons), not cosmetics.
+target-version = "py312"
+line-length = 160
+extend-exclude = ["deploy", "docs"]
+
+[lint]
+select = ["E", "F", "W", "B", "UP"]
+ignore = [
+  "E401", "E701", "E702", "E731", "E741",   # compact one-liners / lambdas / short names are a deliberate style here
+  "E501",                            # long lines: formatter's job, not a bug
+  "B008",                            # FastAPI's Depends()/Query() in defaults is the documented pattern
+  "B904",                            # re-raise chaining is handled case by case
+  "UP007", "UP045",                  # keep Optional/Union readable for Pydantic-generated models
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["B011", "E402", "F841", "B017", "B018"]
+"src/mlops/data/__init__.py" = ["F401"]
+"src/mlops/*/__init__.py" = ["F401"]

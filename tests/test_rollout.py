@@ -133,7 +133,7 @@ def test_ab_assignment_is_sticky_per_customer(api):
     cl, v1, v2 = api
     cl.post("/deployment", json={"mode": "ab", "traffic_split": 0.5})
     seen = {}
-    for rnd in range(3):
+    for _ in range(3):
         for i in range(60):
             v = cl.post("/predict", json={**_VALID, "entity_id": f"cust-{i}"}).json()["variant"]
             assert seen.setdefault(i, v) == v

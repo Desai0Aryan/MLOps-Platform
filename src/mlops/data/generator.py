@@ -9,7 +9,7 @@ produce both so the monitoring in later parts has something real to detect:
   features and churn changes (e.g. a competitor makes fiber customers leave).
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 

@@ -1,5 +1,5 @@
 """Static checks on the container stack, runnable anywhere (no Docker needed)."""
-import json, re, shutil, subprocess
+import re, shutil, subprocess
 from pathlib import Path
 import pytest, yaml
 

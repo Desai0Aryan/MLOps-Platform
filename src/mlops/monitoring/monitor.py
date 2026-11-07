@@ -1,8 +1,7 @@
 """Monitor: pulls live traffic from the prediction log, compares it with the champion's own
 reference profile (stored in MLflow next to the model), and persists the verdict."""
 from __future__ import annotations
-import datetime as dt
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 
 import mlflow
 import numpy as np

@@ -1,11 +1,11 @@
 import copy, pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from mlops.data import generate_dataset
 from mlops.registry import ModelRegistry, predict_proba
 from mlops.serving import create_app
-from mlops.serving.db import PredictionLog, GroundTruth
+from mlops.serving.db import PredictionLog
 from mlops.simulate import simulate
 from mlops.training import run_training_pipeline
 
@@ -103,3 +103,23 @@ def test_503_when_no_champion(cfg, tmp_path):
         assert cl.get("/health").status_code == 200
         assert cl.get("/ready").status_code == 503
         assert cl.post("/predict", json=VALID).status_code == 503
+
+
+def test_feedback_tolerates_the_background_persist_race(env):
+    """Predictions are persisted AFTER the response is sent. A client that replies with feedback instantly must not get a
+    spurious 'unknown request_id' (found by the post-deploy smoke test; TestClient hides it by running background tasks early)."""
+    import threading, time as _t
+    from mlops.serving.db import PredictionLog
+    c, reg, d = env
+    c2 = copy.deepcopy(c); c2["serving"]["feedback_grace_seconds"] = 1.5
+    with TestClient(create_app(c2, database_url="sqlite://")) as cl:
+        def late_insert():
+            with cl.app.state.SessionLocal() as db:
+                db.add(PredictionLog(request_id="late-1", model_name="m", model_version=1, features={}, probability=.5, prediction=0, latency_ms=1)); db.commit()
+        threading.Timer(0.3, late_insert).start()
+        t = _t.monotonic(); r = cl.post("/feedback", json={"request_id": "late-1", "actual": 1}); waited = _t.monotonic() - t
+        assert r.status_code == 200 and 0.2 < waited < 1.4                       # waited for the row, but not the full grace period
+        t = _t.monotonic(); r = cl.post("/feedback", json={"request_id": "never-existed", "actual": 1})
+        assert r.status_code == 404 and _t.monotonic() - t >= 1.4                # a genuinely unknown id still fails, after the grace
+        b = cl.post("/feedback/batch", json={"items": [{"request_id": "late-1", "actual": 0}, {"request_id": "nope", "actual": 0}]}).json()
+        assert b["stored"] == 1 and b["n_unknown"] == 1

@@ -112,7 +112,7 @@ class Orchestrator:
 
     # -------------------------------------------------------------- retrain
     def _maybe_retrain(self, rep) -> dict:
-        rc = self.cfg["retraining"]; steps = []
+        rc = self.cfg["retraining"]
         last = self._last_event("retrain_started")
         if last and (utcnow() - last.created_at) < dt.timedelta(hours=rc["cooldown_hours"]):
             reason = f"cooldown ({rc['cooldown_hours']}h) active"

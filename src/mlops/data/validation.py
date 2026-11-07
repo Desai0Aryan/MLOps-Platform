@@ -7,7 +7,6 @@ to MLflow, and renderable in a dashboard.
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 import json
-import numpy as np
 import pandas as pd
 
 

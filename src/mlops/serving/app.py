@@ -102,7 +102,7 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
             if t:
                 t.cancel()
 
-    app = FastAPI(title="Churn MLOps Serving API", version="0.6.0", lifespan=lifespan,
+    app = FastAPI(title="Churn MLOps Serving API", version="1.0.0", lifespan=lifespan,
                   description="Versioned model serving with shadow deployment, A/B testing, "
                               "statistical decision-making and zero-downtime rollouts.")
     app.state.store, app.state.SessionLocal, app.state.cfg = store, SessionLocal, cfg
@@ -167,7 +167,7 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
             proba, ms = run_inference(lm, rows)
             out = [ShadowPrediction(request_id=i, model_version=lm.version, probability=float(p),
                                     prediction=int(p >= scfg["threshold"]), latency_ms=round(ms, 3))
-                   for i, p in zip(ids, proba)]
+                   for i, p in zip(ids, proba, strict=True)]
         except Exception as e:
             metrics.errors.labels("shadow").inc(len(ids)); metrics.shadow.labels("error").inc(len(ids))
             out = [ShadowPrediction(request_id=i, model_version=lm.version, error=f"{type(e).__name__}: {e}"[:300]) for i in ids]
@@ -238,8 +238,19 @@ def create_app(cfg: dict | None = None, database_url: str | None = None) -> Fast
         return [respond(r) for r in serve_rows([i.model_dump() for i in req.instances], bg)]
 
     # ----------------------------------------------------------------- feedback
+    def find_known(db, ids):
+        return set(db.scalars(select(PredictionLog.request_id).where(PredictionLog.request_id.in_(ids))))
+
     def upsert_labels(db, items):
-        known = set(db.scalars(select(PredictionLog.request_id).where(PredictionLog.request_id.in_([i.request_id for i in items]))))
+        ids = list({i.request_id for i in items})
+        known = find_known(db, ids)
+        # Predictions are persisted by a background task AFTER the response is sent (so the DB never adds latency).
+        # A client that answers with feedback immediately can therefore race that write: give those rows a short grace period.
+        deadline = time.monotonic() + scfg.get("feedback_grace_seconds", 2.0)
+        while len(known) < len(ids) and time.monotonic() < deadline:
+            time.sleep(0.1)
+            db.rollback()                                     # end the old snapshot so new commits become visible
+            known |= find_known(db, [i for i in ids if i not in known])
         ok, missing = 0, []
         for it in items:
             if it.request_id not in known:

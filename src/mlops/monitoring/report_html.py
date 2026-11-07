@@ -6,7 +6,7 @@ COLORS = {"ok": "var(--ok)", "warning": "var(--warn)", "critical": "var(--crit)"
 
 
 def _bars(f: dict) -> str:
-    n = len(f["labels"]);
+    n = len(f["labels"])
     if not n: return ""
     w, h, pad = 300, 90, 14
     mx = max(max(f["ref_dist"]), max(f["live_dist"]), 1e-6)

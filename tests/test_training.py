@@ -1,5 +1,4 @@
 import mlflow, pytest
-import numpy as np
 from mlops.data import generate_dataset
 from mlops.training import run_training_pipeline, DataValidationError, QualityGateError
 

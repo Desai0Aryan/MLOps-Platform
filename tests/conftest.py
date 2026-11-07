@@ -11,6 +11,7 @@ def cfg(tmp_path_factory):
     c = load_config()
     c["mlflow"]["tracking_uri"] = f"sqlite:///{tmp_path_factory.mktemp('mlflow') / 'mlflow.db'}"
     c["data"]["n_train"] = 4000
+    c["serving"]["feedback_grace_seconds"] = 0.0
     return c
 
 

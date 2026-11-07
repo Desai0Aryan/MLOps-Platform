@@ -8,7 +8,6 @@ Statistical significance alone is NOT used for severity: with thousands of rows,
 trivial shifts are "significant". PSI measures whether the shift actually matters.
 """
 from __future__ import annotations
-import math
 from dataclasses import dataclass, field, asdict
 import numpy as np
 import pandas as pd
@@ -78,7 +77,7 @@ def _edges(prof: dict) -> np.ndarray:
 
 def _bin_labels(edges: np.ndarray) -> list[str]:
     out = []
-    for lo, hi in zip(edges[:-1], edges[1:]):
+    for lo, hi in zip(edges[:-1], edges[1:], strict=True):
         out.append(f"≤{hi:.3g}" if np.isinf(lo) else (f">{lo:.3g}" if np.isinf(hi) else f"{lo:.3g}–{hi:.3g}"))
     return out
 

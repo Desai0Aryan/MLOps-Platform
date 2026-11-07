@@ -6,7 +6,7 @@
 
     python scripts/validate_observability.py [--require]     # --require: fail if promtool is missing
 """
-import glob, json, re, shutil, subprocess, sys, tempfile
+import glob, json, shutil, subprocess, sys, tempfile
 from pathlib import Path
 import yaml
 

@@ -1,6 +1,5 @@
 import copy, datetime as dt, pytest
 from sqlalchemy import func, select
-from sqlalchemy.orm import sessionmaker
 
 from mlops.bootstrap import bootstrap, wait_for_mlflow
 from mlops.registry import ModelRegistry

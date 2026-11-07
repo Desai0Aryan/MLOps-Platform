@@ -173,7 +173,7 @@ def run_lifecycle_demo(cfg, html_path: str | None = None) -> int:
         simulate(cl, scenario="market_shift", n=1200, label_rate=0.0, seed=11); tick()
         step(3); simulate(cl, scenario="market_shift", n=2200, label_rate=1.0, seed=12)
         with console.status("orchestrator retraining on production data..."):
-            t = tick(show_report=False)
+            tick(show_report=False)
         step(4); simulate(cl, scenario="market_shift", n=900, label_rate=1.0, seed=13)
         console.print(Panel(str(cl.get("/experiment/analysis").json()["recommendation"]), title="shadow analysis")); tick(show_report=False)
         step(5); simulate(cl, scenario="market_shift", n=2500, label_rate=1.0, seed=14); tick(show_report=False)

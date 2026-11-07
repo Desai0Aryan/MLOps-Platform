@@ -1,4 +1,4 @@
-import copy, numpy as np, pandas as pd, pytest
+import copy, numpy as np, pytest
 from fastapi.testclient import TestClient
 
 from mlops.data import generate_dataset, build_reference_profile

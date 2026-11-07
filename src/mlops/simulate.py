@@ -6,7 +6,7 @@ In Part 5 this is how we *cause* drift on purpose and watch the monitors catch i
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Callable
+from collections.abc import Callable
 import numpy as np
 import pandas as pd
 
@@ -50,7 +50,7 @@ def simulate(client, *, scenario: str = "baseline", n: int = 500, label_rate: fl
         r = client.post("/predict/batch", json={"instances": recs[s:s + batch_size]})
         if r.status_code != 200:
             errors += len(recs[s:s + batch_size]); continue
-        results.extend(zip(r.json(), df["churned"].iloc[s:s + batch_size]))
+        results.extend(zip(r.json(), df["churned"].iloc[s:s + batch_size], strict=True))
         emit("sending predictions", 0.7 * min(s + batch_size, n) / n)
 
     # delayed labels: only some customers' outcomes are ever observed

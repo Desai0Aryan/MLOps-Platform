@@ -1,0 +1,58 @@
+# Production overrides: run PRE-BUILT, CI-verified images from GHCR instead of building on the server.
+#   MLOPS_VERSION=sha-3f2c9ab docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d      (scripts/deploy.sh does this)
+# Required in the server's .env: IMAGE_REPO, POSTGRES_USER, POSTGRES_PASSWORD, ADMIN_TOKEN, GRAFANA_ADMIN_PASSWORD
+# (compose refuses to start if any is missing: no silent fallback to the dev defaults).
+# TLS and public exposure are intentionally out of scope: put Caddy/nginx in front of 127.0.0.1:8000 and :3000.
+x-image: &image ghcr.io/${IMAGE_REPO:?set IMAGE_REPO (lowercase owner/repo)}:${MLOPS_VERSION:?set MLOPS_VERSION to an immutable image tag}
+x-env: &env
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/mlops
+  ADMIN_TOKEN: ${ADMIN_TOKEN:?must be set in production}
+x-log: &log
+  driver: json-file
+  options: {max-size: "20m", max-file: "5"}
+
+services:
+  postgres:
+    restart: always
+    logging: *log
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+  mlflow:
+    image: *image
+    build: !reset null
+    pull_policy: always
+    restart: always
+    logging: *log
+  bootstrap:
+    image: *image
+    build: !reset null
+    pull_policy: always
+    environment: *env
+    logging: *log
+  api:
+    image: *image
+    build: !reset null
+    pull_policy: always
+    restart: always
+    environment: *env
+    ports: !override ["127.0.0.1:8000:8000"]
+    logging: *log
+    deploy: {resources: {limits: {memory: 1g}}}
+  worker:
+    image: *image
+    build: !reset null
+    pull_policy: always
+    restart: always
+    environment: *env
+    logging: *log
+    deploy: {resources: {limits: {memory: 2g}}}      # retraining on production data needs headroom
+  prometheus:
+    restart: always
+    logging: *log
+  grafana:
+    restart: always
+    logging: *log
+    ports: !override ["127.0.0.1:3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?}

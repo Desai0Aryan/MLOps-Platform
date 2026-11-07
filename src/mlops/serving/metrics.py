@@ -45,7 +45,7 @@ class Metrics:
 
 
 def _epoch(iso: str) -> float:
-    return dt.datetime.fromisoformat(iso).replace(tzinfo=dt.timezone.utc).timestamp()
+    return dt.datetime.fromisoformat(iso).replace(tzinfo=dt.UTC).timestamp()
 
 
 class PlatformCollector:
@@ -98,7 +98,7 @@ class PlatformCollector:
                                   "When each kind of lifecycle event last happened (robust for alerting)", labels=["kind"])
         for kind, (n, last) in sorted(snap["events"].items()):
             ev.add_metric([kind], n)
-            ev_ts.add_metric([kind], last.replace(tzinfo=dt.timezone.utc).timestamp())
+            ev_ts.add_metric([kind], last.replace(tzinfo=dt.UTC).timestamp())
         yield ev; yield ev_ts
 
         rep = snap["report"]

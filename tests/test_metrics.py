@@ -1,4 +1,4 @@
-import copy, glob, importlib.util, json, re, shutil, subprocess, sys, time
+import glob, importlib.util, json, re, shutil, subprocess, sys, time
 from pathlib import Path
 import pytest, yaml
 from fastapi.testclient import TestClient
@@ -86,7 +86,6 @@ def test_collector_exports_drift_and_status_from_the_database(world):
 
 def test_collector_tracks_rollout_state_and_lifecycle(world):
     c, reg, cl = world
-    from mlops.registry import ModelRegistry
     reg.register_run(run_training_pipeline(generate_dataset(5000, "baseline", seed=4), c).run_id)
     assert val(cl, "mlops_deployment_mode", mode="champion_only") == 1
     assert cl.post("/deployment", json={"mode": "ab", "traffic_split": 0.25}).status_code == 200

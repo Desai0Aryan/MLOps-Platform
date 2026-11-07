@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
-from .config import load_config, ROOT
+from .config import load_config
 from .data import generate_dataset, SCENARIOS, validate_dataframe
 from .training import run_training_pipeline, DataValidationError, QualityGateError
 

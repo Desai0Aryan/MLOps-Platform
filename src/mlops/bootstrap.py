@@ -8,7 +8,7 @@ so the API has something to serve the moment it starts.
 """
 from __future__ import annotations
 import time, urllib.error, urllib.request
-from typing import Callable
+from collections.abc import Callable
 
 from .data import generate_dataset
 from .registry import ModelRegistry

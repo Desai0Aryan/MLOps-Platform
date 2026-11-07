@@ -23,7 +23,7 @@ def build_reference_profile(df: pd.DataFrame, cfg: dict) -> dict:
             "min": float(s.min()), "max": float(s.max()),
             "null_rate": float(df[col].isna().mean()),
             "quantiles": {str(q): float(v) for q, v in zip([0.05, 0.25, 0.5, 0.75, 0.95],
-                                                           np.quantile(s, [0.05, 0.25, 0.5, 0.75, 0.95]))},
+                                                           np.quantile(s, [0.05, 0.25, 0.5, 0.75, 0.95]), strict=True)},
             "bin_edges": [None if np.isinf(e) else float(e) for e in edges],
             "bin_probs": (counts / counts.sum()).tolist(),
             "sample": s.sample(min(2000, len(s)), random_state=0).round(3).tolist(),  # for KS tests

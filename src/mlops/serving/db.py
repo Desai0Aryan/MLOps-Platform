@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 
 def utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    return dt.datetime.now(dt.UTC).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):

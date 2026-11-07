@@ -1,0 +1,16 @@
+{
+  "roc_auc": 0.7915,
+  "brier": 0.1702,
+  "log_loss": 0.51,
+  "tolerance": {
+    "roc_auc": 0.01,
+    "brier": 0.01
+  },
+  "calibration_gap_max": 0.03,
+  "slice_auc_min": 0.65,
+  "latency_p95_ms_max": 100,
+  "best_model": "logistic_regression",
+  "n_train": 20000,
+  "seed": 42,
+  "python": "3.12.3"
+}

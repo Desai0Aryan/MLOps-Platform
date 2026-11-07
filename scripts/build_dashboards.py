@@ -53,7 +53,7 @@ class Board:
 
     def line(self, panels, h=8, widths=None):
         widths = widths or [24 // len(panels)] * len(panels); x = 0
-        for p, w in zip(panels, widths):
+        for p, w in zip(panels, widths, strict=True):
             self._id += 1
             p.update(id=self._id, gridPos={"h": h, "w": w, "x": x, "y": self._y}, datasource=DS)
             self.d["panels"].append(p); x += w
